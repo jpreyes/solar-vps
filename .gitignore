@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.sql
+*.gz
+*.xlsx
+*.csv
+*.jsonl
+*.log
+backups/
+data/

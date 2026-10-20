@@ -1,0 +1,140 @@
+"""Read-only client derived from the public tumcapp.com web application.
+
+No control commands, device binding, sync, firmware or settings operations.
+This is an undocumented API and requires validation with the owner's account.
+"""
+import hashlib
+import random
+import time
+import requests
+import threading
+import json
+from datetime import datetime,timezone
+from email.utils import parsedate_to_datetime
+
+BASE = 'https://isolar.tumcapp.com'
+LOGIN = '/api/admin/user/login'
+REAL = '/api/admin/realData/getRealByDeviceSn'
+HISTORY = '/api/admin/workInfo/getHistoricalData'
+
+
+class CloudError(Exception):
+    def __init__(self,message,retry_after=0):
+        super().__init__(message)
+        self.retry_after=retry_after
+
+
+def retry_seconds(value):
+    try:
+        return max(0,float(value))
+    except (ValueError,TypeError):
+        try:
+            return max(0,(parsedate_to_datetime(value)-datetime.now(timezone.utc)).total_seconds())
+        except (ValueError,TypeError,OverflowError):
+            return 0
+
+
+def signature(payload, key):
+    # JS Object.keys insertion order; signature uses values BEFORE form encoding.
+    def js_value(v):
+        if isinstance(v, bool):
+            return 'true' if v else 'false'
+        return str(v)
+    raw = '&'.join(f'{k}={js_value(v)}' for k, v in payload.items() if v is not None)
+    units = raw.encode('utf-16-le', errors='surrogatepass')
+    total = sum(int.from_bytes(units[i:i+2], 'little') for i in range(0, len(units), 2))
+    digest = hashlib.sha256(str(total).encode()).hexdigest()
+    return hashlib.sha256((key + digest[-8:] + digest[:8]).encode()).hexdigest()
+
+
+class Cloud:
+    def __init__(self, username, password, session=None):
+        self.username, self.password = username, password
+        self.session = session or requests.Session()
+        self.token, self.key = '', 'null'
+        self.lock = threading.RLock()
+
+    def _post(self, path, payload):
+        headers = {'token': self.token, 'vrt': signature(payload, self.key),
+                   'utcTime': str(random.random()),
+                   'Content-Type': 'application/x-www-form-urlencoded'}
+        response = self.session.post(BASE + path, data=payload, headers=headers,
+                                     timeout=(10, 45), allow_redirects=False)
+        if response.status_code >= 400:
+            delay=retry_seconds(response.headers.get('Retry-After'))
+            if response.status_code==429:
+                delay=max(300,delay)
+            raise CloudError(f'HTTP {response.status_code}',retry_after=delay)
+        if response.status_code != 200:
+            raise CloudError('Respuesta HTTP inesperada')
+        try:
+            result = response.json()
+        except ValueError:
+            raise CloudError('El servidor no devolvió JSON') from None
+        if not isinstance(result, dict) or 'code' not in result:
+            raise CloudError('Formato de API desconocido')
+        return result
+
+    def login(self):
+        password = self.password if self.username.startswith('VCN\\') else hashlib.md5(self.password.encode()).hexdigest()
+        self.token, self.key = '', 'null'
+        result = self._post(LOGIN, {'userName': self.username, 'password': password})
+        if str(result['code']) != '0':
+            raise CloudError(f'Inicio de sesión rechazado: código {result["code"]}')
+        data = result.get('data') or {}
+        if not data.get('token') or not data.get('vrtKey'):
+            raise CloudError('Falta token/vrtKey en la respuesta de acceso')
+        self.token, self.key = str(data['token']), str(data['vrtKey'])
+
+    def read(self, path, payload):
+        with self.lock:
+            return self._read(path, payload)
+
+    def _read(self, path, payload):
+        if path not in (REAL, HISTORY):
+            raise ValueError('Operación no permitida')
+        if not self.token:
+            self.login()
+        result = self._post(path, payload)
+        if str(result['code']) in ('450', '401', '403'):
+            self.login()
+            result = self._post(path, payload)
+        if str(result['code']) != '0':
+            raise CloudError(f'Consulta rechazada: código {result["code"]}')
+        return result
+
+    def realtime(self, sn):
+        result = self.read(REAL, {'deviceSn': sn})
+        if not isinstance(result.get('data'), dict) or not result['data']:
+            raise CloudError('Lectura vacía o formato desconocido')
+        return result
+
+    def history(self, sn, start, end):
+        page = 1
+        received = 0
+        previous = None
+        while True:
+            payload = {'deviceSn': sn, 'startDate': start, 'endDate': end,
+                       'pageNum': page, 'pageSize': 100}
+            result = self.read(HISTORY, payload)
+            data = result.get('data')
+            if not isinstance(data, dict) or not isinstance(data.get('list'), list):
+                raise CloudError('Formato histórico desconocido; importación detenida')
+            if not all(isinstance(row, dict) for row in data['list']):
+                raise CloudError('Filas históricas desconocidas; importación detenida')
+            digest = json.dumps(data['list'], sort_keys=True)
+            if data['list'] and digest == previous:
+                raise CloudError('La API repitió una página; no se marca el periodo como completo')
+            previous = digest
+            yield result, payload
+            count = len(data['list'])
+            received += count
+            total = int(data['total']) if data.get('total') is not None else None
+            if count == 0 and total is not None and received < total:
+                raise CloudError('Historial incompleto: faltan páginas del proveedor')
+            if count == 0 or (total is not None and received >= total):
+                break
+            page += 1
+            if page > 10000:
+                raise CloudError('Límite de paginación: reduce el rango de fechas')
+            time.sleep(1)

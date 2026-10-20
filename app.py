@@ -1,0 +1,284 @@
+import csv
+import hmac
+import io
+import json
+import os
+import threading
+from datetime import datetime, timedelta, timezone
+from functools import wraps
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context, session, redirect, send_file
+from storage import connect, init
+from cloud import Cloud, CloudError
+from storage import save,device_time
+import psycopg
+from werkzeug.exceptions import HTTPException
+from scheduler import settings, set_interval
+from weather import weather_status,weather_id
+
+app = Flask(__name__, static_folder='static')
+_local_refresh_lock = threading.Lock()
+
+
+def protected(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        local_session = app.config.get('LOCAL_SESSION_AUTH', False)
+        if local_session and session.get('local_authorized') is True:
+            return fn(*args, **kwargs)
+        password = os.getenv('DASHBOARD_PASSWORD', '')
+        user = os.getenv('DASHBOARD_USER', 'admin')
+        auth = request.authorization
+        if not password:
+            if request.path.startswith('/api/'):
+                return jsonify(error='Falta configurar el acceso al panel'), 503
+            return Response('Configura DASHBOARD_PASSWORD en el VPS', status=503)
+        if not auth or not (hmac.compare_digest(auth.username.encode(), user.encode())
+                            and hmac.compare_digest((auth.password or '').encode(), password.encode())):
+            if local_session:
+                if request.method == 'GET' and not request.path.startswith('/api/'):
+                    return redirect('/local/login')
+                return jsonify(error='Inicia sesión en /local/login'), 401
+            if request.path.startswith('/api/'):
+                return jsonify(error='La sesión terminó. Vuelve a ingresar al panel.', login_url='/local/login' if local_session else '/'), 401
+            return Response('Acceso requerido', 401, {'WWW-Authenticate': 'Basic realm="Solar VPS"'})
+        return fn(*args, **kwargs)
+    return wrapped
+
+
+@app.after_request
+def security(response):
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+    return response
+
+
+def period():
+    now = datetime.now(timezone.utc)
+    start = datetime.fromisoformat(request.args.get('start', (now - timedelta(days=1)).isoformat()).replace('Z', '+00:00'))
+    end = datetime.fromisoformat(request.args.get('end', now.isoformat()).replace('Z', '+00:00'))
+    if start.tzinfo is None or end.tzinfo is None or start >= end:
+        raise ValueError('Usa fechas ISO con zona horaria y un rango válido')
+    return start, end
+
+
+@app.errorhandler(ValueError)
+def invalid(exc):
+    return jsonify(error=str(exc)), 400
+
+
+@app.errorhandler(psycopg.Error)
+def database_error(exc):
+    app.logger.error('Database failure: %s', type(exc).__name__)
+    if request.path.startswith('/api/'):
+        return jsonify(error='La base de datos no está disponible. Reintenta en unos segundos.'), 503
+    return Response('La base de datos no está disponible.', status=503)
+
+
+@app.errorhandler(HTTPException)
+def http_error(exc):
+    if request.path.startswith('/api/'):
+        messages={404:'La ruta solicitada no existe. Recarga el panel para actualizarlo.',
+                  405:'El método de la consulta no es válido. Recarga el panel.'}
+        return jsonify(error=messages.get(exc.code,'La solicitud no pudo completarse.')), exc.code
+    return exc
+
+
+@app.errorhandler(Exception)
+def unexpected_error(exc):
+    app.logger.error('Request failure: %s', type(exc).__name__)
+    if request.path.startswith('/api/'):
+        return jsonify(error='No se pudo completar la consulta. Puedes volver a intentarlo.'), 500
+    return Response('No se pudo completar la solicitud.', status=500)
+
+
+@app.get('/')
+@protected
+def index():
+    return send_from_directory('static', 'index.html')
+
+
+@app.get('/api/status')
+@protected
+def status():
+    with connect() as db:
+        latest = db.execute("SELECT received_at,response FROM captures WHERE source='realtime' ORDER BY id DESC LIMIT 1").fetchone()
+        last_event = db.execute('SELECT time,ok,detail FROM events ORDER BY id DESC LIMIT 1').fetchone()
+        stats = db.execute('SELECT count(*) AS captures,min(received_at) AS since FROM captures').fetchone()
+        history = db.execute('SELECT * FROM history_sync ORDER BY checked_at DESC LIMIT 1').fetchone()
+        coverage = db.execute("SELECT count(*) AS measurements,min(observed_at) AS first_time,max(observed_at) AS last_time FROM measurements WHERE source='history'").fetchone()
+    if latest:
+        latest['observed_at']=device_time(latest['response'].get('data',{}))[1]
+    return jsonify(latest=latest, event=last_event, stats=stats, history=history, coverage=coverage,collection=settings())
+
+
+@app.post('/api/collection/interval')
+@protected
+def collection_interval():
+    if request.headers.get('Origin') != request.host_url.rstrip('/'):
+        return jsonify(error='Origen no permitido'),403
+    data=request.get_json(silent=True) or {}
+    set_interval(data.get('seconds'))
+    return jsonify(ok=True,collection=settings())
+
+
+@app.get('/api/weather')
+@protected
+def weather_current():
+    return jsonify(weather_status())
+
+
+@app.get('/api/weather/series')
+@protected
+def weather_series():
+    start,end=period()
+    with connect() as db:
+        rows=db.execute('''SELECT DISTINCT ON(observed_at) observed_at,received_at,payload
+          FROM measurements WHERE source='weather' AND device_sn=%s
+          AND observed_at>=%s AND observed_at<%s ORDER BY observed_at,id DESC LIMIT 5001''',
+          (weather_id(),start,end)).fetchall()
+    return jsonify(rows=rows[:5000],truncated=len(rows)>5000,time_basis='hourly_weather_model_UTC')
+
+
+@app.post('/api/refresh')
+@protected
+def refresh():
+    if request.headers.get('Origin') != request.host_url.rstrip('/'):
+        return jsonify(error='Origen no permitido'), 403
+    if os.getenv('LOCAL_SERIAL_DB') == '1':
+        # The embedded test database has one backend. Release it before any
+        # vendor HTTP call so history and status remain available while waiting.
+        if not _local_refresh_lock.acquire(blocking=False):
+            return jsonify(cached=True, busy=True), 202
+        try:
+            with connect() as db:
+                recent = _recent_reading(db)
+            if recent:
+                return jsonify(cached=True)
+            return _capture_current()
+        finally:
+            _local_refresh_lock.release()
+    # Cross-worker throttle: an open page may request one new snapshot per minute.
+    with connect() as db:
+        if not db.execute('SELECT pg_try_advisory_xact_lock(731894) AS locked').fetchone()['locked']:
+            return jsonify(cached=True, busy=True), 202
+        if _recent_reading(db):
+            return jsonify(cached=True)
+        return _capture_current(db)
+
+
+def _recent_reading(db):
+    return db.execute("SELECT id FROM captures WHERE source='realtime' AND received_at > now()-interval '60 seconds' LIMIT 1").fetchone()
+
+
+def _capture_current(db=None):
+    callback = app.config.get('LOCAL_LIVE_READER')
+    try:
+        if callback:
+            sn, result = callback()
+        else:
+            if not all(os.getenv(k) for k in ('SOLAR_USERNAME','SOLAR_PASSWORD','SOLAR_DEVICE_SN')):
+                return jsonify(error='Conecta primero el equipo en /local'), 409
+            sn = os.environ['SOLAR_DEVICE_SN']
+            client = Cloud(os.environ['SOLAR_USERNAME'], os.environ['SOLAR_PASSWORD'])
+            result = client.realtime(sn)
+        save(sn, 'realtime', result, {'deviceSn': sn}, db=db)
+    except psycopg.Error:
+        raise
+    except Exception as exc:
+        detail = str(exc) if isinstance(exc, CloudError) else type(exc).__name__
+        return jsonify(error='No se pudo consultar al proveedor: '+detail), 502
+    return jsonify(ok=True)
+
+
+@app.get('/api/series')
+@protected
+def series():
+    start, end = period()
+    with connect() as db:
+        rows = db.execute('''WITH ordered AS (
+          SELECT DISTINCT ON (device_sn,COALESCE(observed_at,received_at))
+          received_at,COALESCE(observed_at,received_at) AS observed_at,device_time_raw,source,payload
+          FROM measurements WHERE source IN ('realtime','history') AND COALESCE(observed_at,received_at) >= %s
+          AND COALESCE(observed_at,received_at) < %s
+          ORDER BY device_sn,COALESCE(observed_at,received_at),(source='history') DESC,id DESC)
+          SELECT * FROM ordered ORDER BY observed_at LIMIT 5001''', (start, end)).fetchall()
+    return jsonify(rows=rows[:5000], truncated=len(rows) > 5000,
+                   time_basis='observed_at: fecha de la medición; recepción si falta una fecha interpretable')
+
+
+@app.get('/api/export.jsonl')
+@protected
+def export_raw():
+    all_data = request.args.get('all') == '1'
+    bounds = None if all_data else period()
+    with connect() as db:
+        db.execute('SELECT 1')  # Report an unavailable DB before starting a file.
+    @stream_with_context
+    def generate():
+        with connect() as db:
+            with db.cursor(name='raw_export') as cursor:
+                if all_data:
+                    cursor.execute('SELECT received_at,device_sn,source,request,response FROM captures ORDER BY id')
+                else:
+                    cursor.execute('''SELECT received_at,device_sn,source,request,response FROM captures
+                      WHERE received_at >= %s AND received_at < %s ORDER BY id''', bounds)
+                for row in cursor:
+                    yield json.dumps(row, default=str, ensure_ascii=False) + '\n'
+    return Response(generate(), mimetype='application/x-ndjson',
+                    headers={'Content-Disposition': 'attachment; filename='+('solar-todos-los-originales.jsonl' if all_data else 'solar-originales.jsonl')})
+
+
+@app.get('/api/export.csv')
+@protected
+def export_csv():
+    all_data = request.args.get('all') == '1'
+    bounds = None if all_data else period()
+    with connect() as db:
+        db.execute('SELECT 1')
+    @stream_with_context
+    def generate():
+        def line(values):
+            # Prevent spreadsheet formulas in strings from the upstream service.
+            safe = ["'" + v if isinstance(v, str) and v.lstrip().startswith(('=', '+', '-', '@')) else v for v in values]
+            buf = io.StringIO()
+            csv.writer(buf).writerow(safe)
+            return buf.getvalue()
+        yield '\ufeff' + line(['received_at', 'device_sn', 'source', 'device_time_raw', 'observed_at', 'field', 'value'])
+        with connect() as db:
+            with db.cursor(name='csv_export') as cursor:
+                if all_data:
+                    if request.args.get('source')=='weather':
+                        cursor.execute('''SELECT received_at,device_sn,source,device_time_raw,observed_at,payload
+                          FROM measurements WHERE source='weather' ORDER BY observed_at,id''')
+                    else:
+                        cursor.execute('''SELECT received_at,device_sn,source,device_time_raw,observed_at,payload
+                          FROM measurements ORDER BY COALESCE(observed_at,received_at),id''')
+                else:
+                    cursor.execute('''SELECT received_at,device_sn,source,device_time_raw,observed_at,payload
+                      FROM measurements WHERE COALESCE(observed_at,received_at) >= %s AND COALESCE(observed_at,received_at) < %s ORDER BY COALESCE(observed_at,received_at),id''', bounds)
+                for row in cursor:
+                    for field, value in row['payload'].items():
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value, ensure_ascii=False)
+                        yield line([str(row['received_at']), row['device_sn'], row['source'], row['device_time_raw'],
+                                    str(row['observed_at'] or ''), field, value])
+    return Response(generate(), mimetype='text/csv',
+                    headers={'Content-Disposition': 'attachment; filename='+('solar-todos-los-datos.csv' if all_data else 'solar-mediciones.csv')})
+
+
+@app.get('/api/export.xlsx')
+@protected
+def export_excel():
+    from excel_export import workbook_file
+    file = workbook_file()
+    response = send_file(file, as_attachment=True, download_name='solar-todos-los-datos.xlsx',
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', conditional=False)
+    response.call_on_close(file.close)
+    return response
+
+
+if __name__ == '__main__':
+    init()
+    app.run(host='127.0.0.1', port=8088)
