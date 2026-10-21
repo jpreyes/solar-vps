@@ -45,6 +45,7 @@ def config():
         'min_soc': int(os.getenv('CONTROL_MIN_SOC', '15')),
         'max_commands_day': int(os.getenv('CONTROL_MAX_COMMANDS_DAY', '6')),
         'interval': int(os.getenv('CONTROL_INTERVAL_SECONDS', '900')),
+        'max_data_age_min': int(os.getenv('CONTROL_MAX_DATA_AGE_MIN', '30')),
     }
 
 
@@ -238,6 +239,12 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         if cfg['mode'] == 'dry-run' or not (st['enabled'] or request):
             log_action(db, 'dry-run', target['reason'], commands, snapshot(current))
             return 'Simulación: enviaría ' + ', '.join(commands)
+        # The cloud accepts commands for an offline datalogger but cannot deliver them (seen as 799011).
+        last_seen = series[-1][0] if series else None
+        if last_seen is None or now - last_seen > timedelta(minutes=cfg['max_data_age_min']):
+            age = 'sin datos' if last_seen is None else f'último dato hace {int((now - last_seen).total_seconds() // 60)} min'
+            log_action(db, 'on', target['reason'], commands, snapshot(current), error=f'Equipo sin conexión ({age}); se reintentará')
+            return f'Equipo sin conexión ({age}): no se envía.'
         if commands_today(db) + len(commands) > cfg['max_commands_day']:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
