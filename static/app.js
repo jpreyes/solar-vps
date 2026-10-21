@@ -3,6 +3,7 @@ const WEATHER_METRICS=[['global_tilted_irradiance','Irradiancia en paneles (GTI)
 for(const [key,label] of WEATHER_METRICS){const option=document.createElement('option');option.value='weather:'+key;option.textContent=label;$('metric').append(option)}
 let series={main:null,compare:null},activeRange='today',previousRange=null,drag=null,loadNumber=0,refreshing=false;
 const COLORS={main:'#237c7b',band:'rgba(35,124,123,.16)',compare:'#c08a2e',grid:'#e5ece6',axis:'#6b8078'};
+function themeColors(){const css=getComputedStyle(document.documentElement),v=n=>css.getPropertyValue(n).trim();if(v('--line')){COLORS.grid=v('--line');COLORS.axis=v('--muted');COLORS.main=v('--accent')}}
 const localInput=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);
 function number(v){return v===null||v===undefined||v===''||typeof v==='boolean'?null:Number.isFinite(Number(v))?Number(v):null}
 function display(v){const n=number(v);return n===null?'—':n.toLocaleString('es-CL',{maximumFractionDigits:1})}
@@ -37,6 +38,8 @@ async function status(){
     card('Estado de batería',x.soc,'%',x.battery_valid===false?'⚠ Lectura de batería no válida':'Tensión '+display(x.battery_v)+' V'),
     card('Flujo de batería',(x.battery_charge_w||0)-(x.battery_discharge_w||0),'W',flow+' · + carga / − descarga'),
     card('Importación de red',x.grid_import_w,'W',x.on_grid===true?'Modo red (L): la casa usa la red':x.on_grid===false?'Modo batería (B): sin consumo de red':'Modo desconocido',x.on_grid?'grid':''));
+  const sideSoc=$('sideSoc');if(sideSoc){sideSoc.textContent=display(x.soc)+' %';$('sideMode').textContent=x.on_grid===true?'Red':x.on_grid===false?'Batería':'—'}
+  renderStrings(x,s.pv_config||{max_v:500});
   const age=s.latest?Math.max(0,Math.round((Date.now()-new Date(s.latest.observed_at||s.latest.received_at))/60000)):null;
   updateEnergy(d,s.latest?.observed_at);
   $('status').textContent=s.latest?'Última lectura del equipo hace '+age+' min · '+new Date(s.latest.observed_at||s.latest.received_at).toLocaleString('es-CL'):'Pendiente de la primera lectura';
@@ -45,6 +48,27 @@ async function status(){
   const h=s.coverage;$('coverage').textContent=h?.measurements?h.measurements+' registros históricos · '+(h.first_time?new Date(h.first_time).toLocaleString('es-CL'):'fecha pendiente')+' — '+(h.last_time?new Date(h.last_time).toLocaleString('es-CL'):'fecha pendiente'):'Pendiente de la primera descarga histórica.';
   const collection=s.collection;
   if(collection){if(document.activeElement!==$('syncInterval'))$('syncInterval').value=String(collection.interval_seconds);$('syncInfo').textContent='Intervalo activo: '+collection.interval_seconds/60+' min.'+(collection.last_duration!==null?' Última descarga: '+collection.last_duration.toFixed(1)+' s, '+collection.last_pages+' páginas, '+(collection.last_added||0)+' registros nuevos.':' Sin descarga cronometrada todavía.')+(collection.last_error?' Error: '+collection.last_error:'')}
+}
+function renderStrings(x,cfg){
+  const box=$('strings');if(!box)return;$('pvLimit').textContent=cfg.max_v;
+  const max=cfg.max_v,pos=v=>Math.max(0,Math.min(100,v/max*100));
+  const rows=[['PV1',x.pv1_v,x.pv1_w],['PV2',x.pv2_v,x.pv2_w]],notes=[];
+  const sunny=rows.some(r=>(r[2]||0)>300);
+  box.replaceChildren(...rows.map(([name,v,w])=>{
+    const amps=v>20&&w!==null?w/v:null,dead=sunny&&(v??0)<20,high=(v??0)>=0.9*max;
+    if(dead)notes.push(name+' sin tensión con sol');if(high)notes.push(name+' cerca del límite');
+    const dot=document.createElement('i');dot.className='dot'+(dead?' off':high?' warn':'');dot.style.left=pos(v||0)+'%';
+    const zone=document.createElement('i');zone.className='zone';zone.style.left=pos(cfg.mppt_min_v||90)+'%';zone.style.width=(pos(cfg.mppt_max_v||450)-pos(cfg.mppt_min_v||90))+'%';
+    const mark=document.createElement('i');mark.className='mark';mark.style.left='calc('+pos(max)+'% - 2px)';
+    const bar=document.createElement('div');bar.className='bar';bar.append(zone,mark,dot);
+    const vals=document.createElement('div');vals.className='vals';
+    vals.append(Object.assign(document.createElement('b'),{textContent:display(v)+' V'}),Object.assign(document.createElement('span'),{textContent:display(w)+' W · '+(amps===null?'—':amps.toFixed(1))+' A'}));
+    const right=document.createElement('div');right.append(vals,bar);
+    const label=Object.assign(document.createElement('span'),{className:'name',textContent:name});
+    const row=document.createElement('div');row.className='row';row.append(label,right);return row}));
+  const both=rows.every(r=>(r[1]||0)>150);
+  if(both){const [a,b]=[rows[0][1],rows[1][1]];if(Math.abs(a-b)/Math.max(a,b)>0.15)notes.push('voltajes de los strings difieren más de 15 %')}
+  $('stringsNote').textContent=notes.length?'⚠ '+notes.join(' · '):'Normal';
 }
 async function fetchSeries(metric,q){
   if(!metric)return null;
@@ -77,6 +101,7 @@ function scale(points,bottom,top){
   return {lo,hi,y:v=>bottom-(v-lo)/(hi-lo)*(bottom-top)};
 }
 function draw(){
+  themeColors();
   const canvas=$('chart'),rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;
   canvas.width=rect.width*ratio;canvas.height=300*ratio;const c=canvas.getContext('2d');c.scale(ratio,ratio);
   const compare=series.compare,w=rect.width,left=58,right=w-(compare?58:20),top=20,bottom=248,[first,last]=dates(),span=last-first,x=t=>left+(t-first)/span*(right-left);
@@ -85,7 +110,7 @@ function draw(){
   const points=inRange(main),m=scale(points,bottom,top);c.font='11px system-ui';
   for(let i=0;i<5;i++){const value=m.lo+(m.hi-m.lo)*i/4;c.strokeStyle=COLORS.grid;c.beginPath();c.moveTo(left,m.y(value));c.lineTo(right,m.y(value));c.stroke();c.fillStyle=COLORS.axis;c.textAlign='right';c.fillText(display(value),left-8,m.y(value)+4)}
   const count=Math.max(2,Math.min(7,Math.floor((right-left)/115)));
-  for(let i=0;i<=count;i++){const t=first+span*i/count;c.strokeStyle='#edf1ed';c.beginPath();c.moveTo(x(t),top);c.lineTo(x(t),bottom);c.stroke();c.fillStyle=COLORS.axis;c.textAlign=i===0?'left':i===count?'right':'center';c.fillText(solarTime.tickLabel(t,span),x(t),bottom+25)}
+  for(let i=0;i<=count;i++){const t=first+span*i/count;c.strokeStyle=COLORS.grid;c.beginPath();c.moveTo(x(t),top);c.lineTo(x(t),bottom);c.stroke();c.fillStyle=COLORS.axis;c.textAlign=i===0?'left':i===count?'right':'center';c.fillText(solarTime.tickLabel(t,span),x(t),bottom+25)}
   c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();
   const gapOf=s=>Math.max(s.metric?.startsWith('weather:')?7200000:900000,(s.bucket||0)*2500);
   function segments(list,gap){const out=[];let current=[];for(const p of list){if(current.length&&p[0]-current[current.length-1][0]>gap){out.push(current);current=[]}current.push(p)}if(current.length)out.push(current);return out}
@@ -126,7 +151,7 @@ canvas.addEventListener('pointerup',()=>{if(!drag)return;const selected=drag;dra
 canvas.addEventListener('pointercancel',()=>{drag=null;draw()});
 canvas.addEventListener('dblclick',()=>{if(previousRange)run(()=>changeRange(...previousRange))});
 setDates(...solarTime.range('today'),'today');
-async function updatePanel(){const results=await Promise.allSettled([status(),load(),updateWeather(),updateAlerts(),updateDaily(),updateControl()]);const failure=results.find(result=>result.status==='rejected');if(failure)throw failure.reason}
+async function updatePanel(){const results=await Promise.allSettled([status(),load(),updateWeather(),updateAlerts(),updateDaily(),updateControl(),...(window.updateBattery?[window.updateBattery()]:[])]);const failure=results.find(result=>result.status==='rejected');if(failure)throw failure.reason}
 run(async()=>{await updatePanel();await refresh()});
 run(updateStrategy);
 setInterval(()=>{if(!document.hidden)run(async()=>{if(activeRange&&activeRange!=='yesterday')setDates(...solarTime.range(activeRange),activeRange);await updatePanel();await refresh()})},60000);

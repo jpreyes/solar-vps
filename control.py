@@ -28,6 +28,20 @@ CHARGER = {1: 'solar primero', 2: 'solar + red', 3: 'solo solar'}
 GRID_CHARGERS = (1, 2)  # priorities that let the utility charge the battery
 
 
+def apply_rules(cfg, rules):
+    """Panel-edited rules (stored in the database) override the .env defaults."""
+    if not rules:
+        return cfg
+    cfg = dict(cfg)
+    if rules.get('base'):
+        cfg['base'] = tuple(rules['base'])
+    if rules.get('winter') is False:
+        cfg['winter_months'] = set()
+    if 'storm' in rules:
+        cfg['storm'] = bool(rules['storm'])
+    return cfg
+
+
 def env_pair(name, default):
     low, high = os.getenv(name, default).split('/')
     return int(low), int(high)
@@ -284,6 +298,7 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
     calibration_done = len(tail) >= 3 and all(v is not None and v >= 99 for v in tail)
     with connect() as db:
         st = state(db)
+        cfg = apply_rules(cfg, st.get('rules'))
         db.execute('UPDATE control_state SET last_params=%s, params_at=now(), updated_at=now() WHERE id=1',
                    (Jsonb(snapshot(current) | {'soc_mode': current['soc_mode'], 'battery_type': current['battery_type'],
                                                 'ranges': {k: current[k] for k in KEYS},

@@ -2,6 +2,14 @@
 
 Primera versión para un inversor, alojada en tu propio Ubuntu. Recolector independiente de la web, PostgreSQL persistente, panel con gráficos y exportaciones Excel/CSV/JSONL. Control automático opcional de tres ajustes de batería (apagado por defecto; ver «Control automático»).
 
+## Panel
+
+Menú lateral con seis secciones (en el celular, barra inferior); modo oscuro automático según el sistema:
+
+- **Ahora**: números clave, diagrama de flujo, tarjeta **Paneles** con voltaje, corriente y potencia de cada string frente al rango MPPT (90–450 V) y el límite del inversor (`INVERTER_MAX_PV_V`), y pronóstico de mañana. Las alertas quedan en el botón "Alertas" de la barra superior.
+- **Batería**: ajuste actual del inversor, próximo cambio automático, tres estrategias listas (equilibrada, más barata, más reserva), umbrales propios con estimación inmediata (`/api/strategy/estimate`) e interruptores por regla. "Aplicar con la automatización" guarda las reglas en la base de datos (tienen prioridad sobre el `.env`) y activa la automatización; historial y análisis detallado plegados.
+- **Energía**: balance diario. **Clima**: tiempo actual y próximos días. **Datos**: gráfico histórico y exportaciones. **Ajustes**: frecuencia de descarga y datos originales.
+
 ## Novedades (análisis y gestión de batería)
 
 - **Interpretación correcta del inversor.** `gridPowerInputActiveTotal` copia el consumo en modo batería (B); solo en modo red (L) es importación. El panel, los kWh diarios y el diagrama usan `gridImport` derivado. En modo L la casa se alimenta de la red y el sol solo carga la batería (medido).

@@ -389,21 +389,11 @@ def full_charge_stats(days, trace, winter=(6, 7)):
             'streak_worst_days': streaks[-1] if streaks else None}
 
 
-def strategy_study(series=None, current=None, now=None):
-    """Simulate SOC thresholds over the archived climate with the measured load."""
-    key = int((now or time.time()) // 3600)
-    if key in _cache:
-        return _cache[key]
-    with connect() as db:
-        from weather import weather_id
-        climate = db.execute('''SELECT observed_at,gti,ghi,temperature,gti_planes FROM climate_hourly
-          WHERE location=%s ORDER BY observed_at''', (weather_id(),)).fetchall()
-        if series is None:
-            series = samples(datetime(2000, 1, 1, tzinfo=timezone.utc), datetime.now(timezone.utc), db)
-    if len(climate) < 24 * 365:
-        return {'ready': False, 'reason': 'Descargando la climatología horaria de Valdivia; vuelve a intentar en unos minutos.',
-                'climate_hours': len(climate)}
-    measured_capacity = estimate_capacity_kwh(series)
+_steps_cache = {}
+
+
+def climate_steps(climate, series):
+    """Hourly (month, PV kWh, load kWh) over the archived climate, plus the day of each step."""
     system = system_from_env()  # nameplate; the SOC-based estimate is reported, not simulated
     shape, monthly, measured_months = load_model(series)
     zone, kwps = tz(), plane_kwps()
@@ -419,6 +409,63 @@ def strategy_study(series=None, current=None, now=None):
         # Archive values average the preceding hour; attribute them to that hour.
         hour = (local.hour - 1) % 24
         steps.append((local.month, pv, monthly[local.month] * shape[hour]))
+    return system, steps, days, monthly, measured_months
+
+
+def strategy_inputs(now=None):
+    """Cached climate steps for interactive estimates (rebuilt once per hour)."""
+    key = int((now or time.time()) // 3600)
+    if key not in _steps_cache:
+        with connect() as db:
+            from weather import weather_id
+            climate = db.execute('''SELECT observed_at,gti,ghi,temperature,gti_planes FROM climate_hourly
+              WHERE location=%s ORDER BY observed_at''', (weather_id(),)).fetchall()
+            series = samples(datetime.now(timezone.utc) - timedelta(days=400), datetime.now(timezone.utc), db)
+        if len(climate) < 24 * 365:
+            return None
+        _steps_cache.clear()
+        _steps_cache[key] = climate_steps(climate, series)
+    return _steps_cache[key]
+
+
+def estimate_thresholds(low, high, winter=None, winter_months=(6, 7)):
+    """Grid use, cost, reserve and full-charge health for one threshold choice."""
+    inputs = strategy_inputs()
+    if inputs is None:
+        return None
+    system, steps, days, _, _ = inputs
+    if winter:
+        strategy = Strategy.seasonal((low, high), tuple(winter),
+                                     summer_months=tuple(m for m in range(1, 13) if m not in winter_months))
+    else:
+        strategy = Strategy.fixed(low, high)
+    trace = []
+    total, _ = simulate(steps, system, strategy, trace=trace)
+    years = len(steps) / 8766
+    tariff, wear = env_float('GRID_TARIFF_CLP_KWH', '230'), env_float('BATTERY_WEAR_CLP_KWH', '45')
+    return {'low': low, 'high': high, 'winter': winter, 'grid_kwh_year': round(total['grid'] / years),
+            'cost_clp_year': round(cost(total, years, tariff, wear)), 'self_sufficiency': round(total['self_sufficiency'], 3),
+            'reserve_kwh': round(system.capacity_kwh * low / 100 * system.discharge_eff, 1),
+            'winter_reserve_kwh': round(system.capacity_kwh * (winter[0] if winter else low) / 100 * system.discharge_eff, 1),
+            **full_charge_stats(days, trace)}
+
+
+def strategy_study(series=None, current=None, now=None):
+    """Simulate SOC thresholds over the archived climate with the measured load."""
+    key = int((now or time.time()) // 3600)
+    if key in _cache:
+        return _cache[key]
+    with connect() as db:
+        from weather import weather_id
+        climate = db.execute('''SELECT observed_at,gti,ghi,temperature,gti_planes FROM climate_hourly
+          WHERE location=%s ORDER BY observed_at''', (weather_id(),)).fetchall()
+        if series is None:
+            series = samples(datetime(2000, 1, 1, tzinfo=timezone.utc), datetime.now(timezone.utc), db)
+    if len(climate) < 24 * 365:
+        return {'ready': False, 'reason': 'Descargando la climatología horaria de Valdivia; vuelve a intentar en unos minutos.',
+                'climate_hours': len(climate)}
+    measured_capacity = estimate_capacity_kwh(series)
+    system, steps, days, monthly, measured_months = climate_steps(climate, series)
     years = len(steps) / 8766
     tariff, wear = env_float('GRID_TARIFF_CLP_KWH', '230'), env_float('BATTERY_WEAR_CLP_KWH', '45')
     strategies = candidate_strategies()

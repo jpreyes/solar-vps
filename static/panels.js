@@ -4,13 +4,15 @@ const PANEL_COLORS={pv:'#e0a93b',load:'#237c7b',grid:'#5b8fd6',expected:'#8a6a1e
 let dailyRows=[],strategyData=null;
 function el(tag,attrs={},...children){const e=document.createElement(tag);for(const [k,v] of Object.entries(attrs)){if(k==='class')e.className=v;else if(k==='style')e.style.cssText=v;else e.setAttribute(k,v)}e.append(...children.filter(c=>c!==null&&c!==undefined));return e}
 function fmt(v,digits=1){return v===null||v===undefined||!Number.isFinite(Number(v))?'—':Number(v).toLocaleString('es-CL',{maximumFractionDigits:digits})}
+function themeVar(name,fallback){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()||fallback}
 function canvasContext(id,height){const canvas=document.getElementById(id),rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=rect.width*ratio;canvas.height=height*ratio;const c=canvas.getContext('2d');c.scale(ratio,ratio);c.font='11px system-ui';return [c,rect.width]}
 
 async function updateAlerts(){
   const box=document.getElementById('alerts');
   const r=await solarRequest('/api/insights');
   const items=r.alerts.map(a=>el('div',{class:'alert '+a.level},el('b',{},a.level==='warning'?'⚠ ':'ℹ '),a.text,a.last?el('span',{class:'small muted'},' · último: '+new Date(a.last).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})):null));
-  box.replaceChildren(...items);box.hidden=!items.length;
+  box.replaceChildren(...items);box.hidden=!(box.dataset.open==='1'&&items.length);
+  const count=document.getElementById('alertCount');if(count){count.textContent=items.length;count.classList.toggle('on',items.some(i=>i.className.includes('warning')))}
   const t=r.thresholds||{},facts=[];
   if(t.to_grid_soc!==null&&t.to_grid_soc!==undefined)facts.push(['Pasa a red al',fmt(t.to_grid_soc,0)+' %']);
   if(t.to_battery_soc!==null&&t.to_battery_soc!==undefined)facts.push(['Vuelve a batería al',fmt(t.to_battery_soc,0)+' %']);
@@ -35,9 +37,9 @@ async function updateDaily(){
 function drawDaily(){
   if(!document.getElementById('dailyChart'))return;
   const [c,w]=canvasContext('dailyChart',260),left=46,right=w-12,top=14,bottom=222,rows=dailyRows;
-  if(!rows.length){c.fillStyle='#6b8078';c.fillText('Sin días con datos todavía.',left,120);return}
+  if(!rows.length){c.fillStyle=themeVar('--muted','#6b8078');c.fillText('Sin días con datos todavía.',left,120);return}
   const max=Math.max(1,...rows.flatMap(d=>[d.pv_kwh,d.load_kwh,d.grid_kwh,d.pv_expected_kwh||0]))*1.1,y=v=>bottom-v/max*(bottom-top);
-  for(let i=0;i<=4;i++){const v=max*i/4;c.strokeStyle='#e5ece6';c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle='#6b8078';c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
+  for(let i=0;i<=4;i++){const v=max*i/4;c.strokeStyle=themeVar('--line','#e5ece6');c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
   const slot=(right-left)/rows.length,bar=Math.max(1,Math.min(14,slot/4));
   rows.forEach((d,i)=>{
     const x0=left+i*slot+slot/2-bar*1.5;
@@ -45,9 +47,9 @@ function drawDaily(){
     c.globalAlpha=1;
     if(d.pv_expected_kwh!==null&&d.covered_hours>=20){c.strokeStyle=PANEL_COLORS.expected;c.lineWidth=2;c.beginPath();c.moveTo(x0-2,y(d.pv_expected_kwh));c.lineTo(x0+bar*3+1,y(d.pv_expected_kwh));c.stroke();c.lineWidth=1}
     const every=Math.ceil(rows.length/Math.max(2,Math.floor((right-left)/48)));
-    if(i%every===0){c.fillStyle='#6b8078';c.textAlign='center';const [yy,mm,dd]=d.date.split('-');c.fillText(dd+' '+MONTHS[+mm-1],left+i*slot+slot/2,bottom+16)}
+    if(i%every===0){c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='center';const [yy,mm,dd]=d.date.split('-');c.fillText(dd+' '+MONTHS[+mm-1],left+i*slot+slot/2,bottom+16)}
   });
-  c.fillStyle='#6b8078';c.textAlign='left';c.fillText('kWh',4,top+4);
+  c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='left';c.fillText('kWh',4,top+4);
 }
 
 function adviceFor(day,loadKwh){
@@ -62,6 +64,8 @@ async function updateStrategy(){
   const loadKwh=s.ready?s.load_daily_kwh[String(new Date().getMonth()+1)]:14;
   document.getElementById('forecast').replaceChildren(...(r.forecast.length?r.forecast:[]).map(d=>{const [tone,text]=adviceFor(d,loadKwh);const date=new Date(d.date+'T12:00:00');return el('div',{class:'day '+tone},el('span',{},date.toLocaleDateString('es-CL',{weekday:'short',day:'numeric',month:'short'})),el('b',{},fmt(d.pv_kwh,0)+' kWh'),el('small',{},'nubes '+fmt(d.cloud_cover,0)+' % · ráfagas '+fmt(d.gust_max_kmh,0)+' km/h · '+fmt(d.precipitation_mm)+' mm'),el('p',{},text))}));
   if(!r.forecast.length)document.getElementById('forecast').textContent='El pronóstico aparecerá tras la próxima descarga meteorológica.';
+  const tomorrow=r.forecast.find(d=>d.hours>=20),t=document.getElementById('tomorrow');
+  if(t)t.textContent=tomorrow?adviceFor(tomorrow,loadKwh)[1]+' Se esperan ~'+fmt(tomorrow.pv_kwh,0)+' kWh solares, ráfagas de '+fmt(tomorrow.gust_max_kmh,0)+' km/h.':'Pronóstico pendiente.';
   if(!s.ready){document.getElementById('strategySummary').textContent=s.reason;return}
   const results=s.results,best=results.find(x=>x.name===s.best),current=results.find(x=>x.name.includes('(actual)'));
   const seasonal=results.find(x=>x.name.includes('40/50 invierno'));
@@ -85,8 +89,8 @@ function drawMonthly(){
   const sets=[[current,PANEL_COLORS.current],[best,PANEL_COLORS.best],[winter,PANEL_COLORS.winter]].filter(([x])=>x&&!(x===current&&x.name===s.best));
   const [c,w]=canvasContext('monthlyGrid',200),left=46,right=w-12,top=24,bottom=176;
   const max=Math.max(1,...sets.flatMap(([x])=>Object.values(x.grid_kwh_month)))*1.1,y=v=>bottom-v/max*(bottom-top),slot=(right-left)/12,bar=Math.min(14,slot/(sets.length+1));
-  for(let i=0;i<=3;i++){const v=max*i/3;c.strokeStyle='#e5ece6';c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle='#6b8078';c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
-  for(let m=1;m<=12;m++){sets.forEach(([x,color],j)=>{const v=x.grid_kwh_month[m]||0;c.fillStyle=color;c.fillRect(left+(m-1)*slot+slot/2-bar*sets.length/2+j*bar,y(v),bar-1,bottom-y(v))});c.fillStyle='#6b8078';c.textAlign='center';c.fillText(MONTHS[m-1],left+(m-.5)*slot,bottom+15)}
+  for(let i=0;i<=3;i++){const v=max*i/3;c.strokeStyle=themeVar('--line','#e5ece6');c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
+  for(let m=1;m<=12;m++){sets.forEach(([x,color],j)=>{const v=x.grid_kwh_month[m]||0;c.fillStyle=color;c.fillRect(left+(m-1)*slot+slot/2-bar*sets.length/2+j*bar,y(v),bar-1,bottom-y(v))});c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='center';c.fillText(MONTHS[m-1],left+(m-.5)*slot,bottom+15)}
   c.textAlign='left';let lx=left;for(const [x,color] of sets){c.fillStyle=color;c.fillRect(lx,6,10,10);c.fillStyle='#4a6470';c.fillText(x.name,lx+14,15);lx+=c.measureText(x.name).width+34}
 }
 function drawPanels(){drawDaily();drawMonthly()}

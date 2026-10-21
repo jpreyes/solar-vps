@@ -123,7 +123,9 @@ def status():
     if newest and (not latest or not latest['observed_at'] or newest['observed_at']>latest['observed_at']):
         latest={'received_at':newest['received_at'],'observed_at':newest['observed_at'],'response':{'data':newest['payload']}}
     derived=analysis.derive(latest['response'].get('data') or {}) if latest else None
-    return jsonify(latest=latest, derived=derived, event=last_event, stats=stats, history=history, coverage=coverage,collection=settings())
+    pv_config={'max_v':analysis.env_float('INVERTER_MAX_PV_V','500'),'panel_voc':analysis.env_float('PV_PANEL_VOC','51.3'),
+               'panels':int(analysis.env_float('PV_PANELS_PER_STRING','8')),'mppt_max_v':450,'mppt_min_v':90}
+    return jsonify(latest=latest, derived=derived, pv_config=pv_config, event=last_event, stats=stats, history=history, coverage=coverage,collection=settings())
 
 
 @app.get('/api/field')
@@ -285,6 +287,57 @@ def series():
                    time_basis='observed_at: fecha de la medición; recepción si falta una fecha interpretable')
 
 
+@app.get('/api/strategy/estimate')
+@protected
+def strategy_estimate():
+    def pct(name, default=None):
+        value=request.args.get(name,default)
+        if value is None:
+            return None
+        if not value.isdigit() or int(value)%5 or not 5<=int(value)<=100:
+            raise ValueError('Umbrales en múltiplos de 5 entre 5 y 100')
+        return int(value)
+    low,high=pct('low','20'),pct('high','30')
+    wlow,whigh=pct('winter_low'),pct('winter_high')
+    if high<low+5 or (wlow is not None and (whigh is None or whigh<wlow+5)):
+        raise ValueError('La vuelta a batería debe superar la vuelta a red en al menos 5 puntos')
+    result=analysis.estimate_thresholds(low,high,(wlow,whigh) if wlow is not None else None)
+    if result is None:
+        return jsonify(error='La climatología aún se está descargando'),503
+    return jsonify(result)
+
+
+@app.post('/api/control/rules')
+@protected
+def control_rules():
+    if not _same_origin():
+        return jsonify(error='Origen no permitido'),403
+    import control
+    cfg=control.config()
+    data=request.get_json(silent=True) or {}
+    rules={}
+    if 'base' in data:
+        low,high=(data['base']+[None,None])[:2] if isinstance(data['base'],list) else (None,None)
+        if not all(type(v) is int for v in (low,high)) or low%5 or high%5 or not cfg['min_soc']<=low<=60 or not low+5<=high<=100:
+            raise ValueError(f'Umbrales: vuelta a red {cfg["min_soc"]}–60 %, vuelta a batería ≥ red + 5, múltiplos de 5')
+        rules['base']=[low,high]
+    for key in ('winter','storm','enabled'):
+        if key in data:
+            if not isinstance(data[key],bool):
+                raise ValueError(f'{key} debe ser verdadero o falso')
+            rules[key]=data[key]
+    with connect() as db:
+        current=db.execute('SELECT rules FROM control_state WHERE id=1').fetchone()['rules'] or {}
+        enabled=rules.pop('enabled',None)
+        merged={**current,**rules}
+        db.execute('UPDATE control_state SET rules=%s,updated_at=now() WHERE id=1',(psycopg.types.json.Jsonb(merged),))
+        if enabled is not None:
+            if enabled and cfg['mode']!='on':
+                return jsonify(error='Para activar la automatización, el VPS debe tener CONTROL_MODE=on.'),409
+            db.execute('UPDATE control_state SET enabled=%s,paused_reason=NULL WHERE id=1',(enabled,))
+    return jsonify(ok=True,rules=merged)
+
+
 @app.get('/api/control')
 @protected
 def control_status():
@@ -293,8 +346,10 @@ def control_status():
     with connect() as db:
         st=db.execute('SELECT * FROM control_state WHERE id=1').fetchone()
         actions=db.execute('SELECT * FROM control_actions ORDER BY id DESC LIMIT 20').fetchall()
+    effective=control.apply_rules(cfg,st.get('rules'))
     return jsonify(mode=cfg['mode'],state=st,actions=actions,charger_labels=control.CHARGER,
-                   config={k:(sorted(v) if isinstance(v,set) else v) for k,v in cfg.items()})
+                   config={k:(sorted(v) if isinstance(v,set) else v) for k,v in effective.items()},
+                   rules=st.get('rules') or {})
 
 
 def _same_origin():
