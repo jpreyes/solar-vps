@@ -135,9 +135,10 @@ class Cloud:
         rows = (result.get('data') or {}).get('list') or []
         row = next((r for r in rows if isinstance(r, dict) and str(r.get('deviceSn')) == str(sn)), None)
         if row is None:
-            return {'online': None, 'updated': None}
+            return {'online': None, 'updated': None, 'wifi_version': None, 'firmware': []}
         status = row.get('onlineStatus')
-        return {'online': None if status is None else str(status) == '1', 'updated': row.get('modifyTime')}
+        return {'online': None if status is None else str(status) == '1', 'updated': row.get('modifyTime'),
+                'wifi_version': row.get('wfv'), 'firmware': [row.get(k) for k in ('fw', 'fw2', 'fw3', 'fw4') if row.get(k)]}
 
     def send_settings(self, sn, commands):
         """Send up to three whitelisted battery commands. Returns (code, vendor message).

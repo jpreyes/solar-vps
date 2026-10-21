@@ -322,6 +322,7 @@ def main():
         link = client.device_status(sn)
         print('Conexión con la nube (acepta comandos):', {True: 'online', False: 'OFFLINE', None: 'desconocida'}[link['online']],
               '· última actualización:', link['updated'])
+        print('Datalogger WiFi, versión:', link.get('wifi_version'), '· firmware equipo:', ', '.join(map(str, link.get('firmware') or [])) or '—')
         for name, key in KEYS.items():
             print(f'  {key:5s} {name:10s} {params.get(key)!r}')
         print('Parámetros informados por el equipo:', ', '.join(sorted(params)))

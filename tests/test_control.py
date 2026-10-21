@@ -95,5 +95,6 @@ class DeviceStatusTests(unittest.TestCase):
             {'deviceSn': 'OTHER', 'onlineStatus': 1}, {'deviceSn': 'SN', 'onlineStatus': 0, 'modifyTime': '2026-10-21 11:00:00'}]}}))
         client = Cloud('u', 'p', session)
         client.token = 'T'
-        self.assertEqual(client.device_status('SN'), {'online': False, 'updated': '2026-10-21 11:00:00'})
+        status = client.device_status('SN')
+        self.assertEqual((status['online'], status['updated']), (False, '2026-10-21 11:00:00'))
         self.assertEqual(client.device_status('MISSING')['online'], None)
