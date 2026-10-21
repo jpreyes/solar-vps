@@ -100,12 +100,15 @@ async function updateControl(){
   const parts=[];
   if(r.mode==='off')parts.push('Apagado: no se envía nada al inversor. Para probar, pon CONTROL_MODE=dry-run en el .env del VPS (solo simula y registra qué haría).');
   if(r.mode==='dry-run')parts.push('Simulación: decide y registra los cambios, pero no los envía.');
-  parts.push('Regla: '+cfg.base.join('/')+' todo el año, '+cfg.winter.join('/')+' en los meses '+cfg.winter_months.join(', ')+(cfg.storm?', '+cfg.winter.join('/')+' ante temporal (ráfagas ≥ '+cfg.storm_gust_kmh+' km/h'+(cfg.storm_rain_mm>0?' o lluvia ≥ '+cfg.storm_rain_mm+' mm':'')+')':'')+(cfg.calibration?' y carga de calibración desde la red tras '+cfg.calibration_days+' días sin llegar al 100 %':'')+'.');
+  parts.push('Regla: '+cfg.base.join('/')+' todo el año, '+cfg.winter.join('/')+' en los meses '+cfg.winter_months.join(', ')+(cfg.storm?', '+cfg.winter.join('/')+' ante temporal (ráfagas ≥ '+cfg.storm_gust_kmh+' km/h'+(cfg.storm_rain_mm>0?' o lluvia ≥ '+cfg.storm_rain_mm+' mm':'')+')':'')+(cfg.calibration?' y carga de calibración desde la red (máx. '+cfg.grid_charge_a+' A, de noche) tras '+cfg.calibration_days+' días sin llegar al 100 %':' (carga de calibración desde la red desactivada)')+'.');
   if(st.paused_reason)parts.push('⚠ '+st.paused_reason);
   document.getElementById('controlSummary').textContent=parts.join(' ');
   const facts=[];
   if(p&&p.cloud_online!==undefined&&p.cloud_online!==null)facts.push(['Conexión de comandos (al leer)',p.cloud_online?'online':'⚠ offline (reinicia el inversor o el router)']);
-  if(p){facts.push(['Inversor: vuelta a red',fmt(p.to_grid,0)+' %'],['Inversor: vuelta a batería',fmt(p.to_battery,0)+' %'],['Cargador',labels[p.charger]||String(p.charger)],['Umbrales por SOC',p.soc_mode?'sí':'no ('+p.battery_type+')'])}
+  if(p){facts.push(['Inversor: vuelta a red',fmt(p.to_grid,0)+' %'],['Inversor: vuelta a batería',fmt(p.to_battery,0)+' %'],['Cargador',labels[p.charger]||String(p.charger)],['Carga total / desde red',(p.charge_a??'—')+' A / '+(p.grid_charge_a??'—')+' A'],['Umbrales por SOC',p.soc_mode?'sí':'no ('+p.battery_type+')'])}
+  if(st.calibration_started)facts.push(['Carga desde la red','en curso desde '+new Date(st.calibration_started).toLocaleString('es-CL',{hour:'2-digit',minute:'2-digit'})]);
+  if(st.calibration_blocked)facts.push(['Carga desde la red','⚠ bloqueada: '+st.calibration_blocked]);
+  document.getElementById('unblockGridCharge').hidden=!st.calibration_blocked;
   if(st.params_at)facts.push(['Leído',new Date(st.params_at).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})]);
   if(st.last_target)facts.push(['Objetivo',st.last_target.to_grid+'/'+st.last_target.to_battery+' · '+(labels[st.last_target.charger]||'')],['Motivo',st.last_target.reason]);
   if(st.request)facts.push(['Solicitud pendiente',st.request.label+(st.request.waiting?' · esperando que el equipo vuelva online':'')]);
@@ -121,3 +124,4 @@ async function controlRequest(body){
 document.querySelectorAll('.control [data-preset]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Enviar este ajuste al inversor por 24 horas?'))controlRequest({preset:b.dataset.preset})}));
 document.getElementById('ctlApply').addEventListener('click',()=>{const body={to_grid:Number(document.getElementById('ctlLow').value),to_battery:Number(document.getElementById('ctlHigh').value),charger:Number(document.getElementById('ctlCharger').value),hours:Number(document.getElementById('ctlHours').value)};if(confirm('¿Enviar '+body.to_grid+'/'+body.to_battery+' al inversor por '+body.hours+' h?'))controlRequest(body)});
 document.getElementById('controlToggle').addEventListener('click',async e=>{const out=document.getElementById('controlResult');try{await solarRequest('/api/control/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:e.target.dataset.enabled==='true'})});await updateControl()}catch(error){out.textContent=error.message}});
+document.getElementById('unblockGridCharge').addEventListener('click',async()=>{const out=document.getElementById('controlResult');if(!confirm('¿Permitir otra vez la carga desde la red? Revisa antes por qué se cortó.'))return;try{await solarRequest('/api/control/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear_calibration_block:true})});await updateControl()}catch(error){out.textContent=error.message}});

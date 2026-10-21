@@ -25,7 +25,8 @@ DEVICES = '/api/admin/deviceUser/getMyDevice'
 READ_PATHS = (REAL, HISTORY, PARAM_GET, DEVICES)
 # PBCC = back to grid at SOC %, PBDC = back to battery at SOC %, PCP0n = charger priority
 # (1 solar first, 2 solar + utility, 3 solar only). Format taken from the portal bundle.
-SETTING_COMMAND = re.compile(r'(PBCC\d{3}|PBDC\d{3}|PCP0[123])')
+# MNCHGCnnn = total charge current (A), MUCHGCnnn = utility charge current (A); no scaling for prodId 30/subId 105.
+SETTING_COMMAND = re.compile(r'(PBCC\d{3}|PBDC\d{3}|PCP0[123]|MNCHGC\d{3}|MUCHGC\d{3})')
 
 
 class CloudError(Exception):
@@ -141,12 +142,12 @@ class Cloud:
                 'wifi_version': row.get('wfv'), 'firmware': [row.get(k) for k in ('fw', 'fw2', 'fw3', 'fw4') if row.get(k)]}
 
     def send_settings(self, sn, commands):
-        """Send up to three whitelisted battery commands. Returns (code, vendor message).
+        """Send up to five whitelisted battery commands. Returns (code, vendor message).
 
         The message explains non-zero codes (e.g. device offline or no reply); settings
         responses carry no credentials, unlike login, so it is kept (truncated) for the log.
         """
-        if not commands or len(commands) > 3 or not all(isinstance(c, str) and SETTING_COMMAND.fullmatch(c) for c in commands):
+        if not commands or len(commands) > 5 or not all(isinstance(c, str) and SETTING_COMMAND.fullmatch(c) for c in commands):
             raise ValueError('Comando de configuración no permitido')
         payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{i + 1}': c for i, c in enumerate(commands)},
                                                          separators=(',', ':'))}

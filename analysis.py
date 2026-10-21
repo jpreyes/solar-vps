@@ -365,6 +365,7 @@ def candidate_strategies():
         out.append(strategy)
     calibrate = Strategy.fixed(floor, floor + 10)
     calibrate.calibrate_days, calibrate.name = 10, f'{floor}/{floor + 10} + carga de calibración desde red (10 días)'
+    calibrate.calibrate_kw = env_float('CONTROL_GRID_CHARGE_A', '30') * 0.054  # DC amps x ~54 V
     grid = Strategy.fixed(floor, floor + 10)
     grid.grid_charge_kw, grid.name = 3.0, f'{floor}/{floor + 10} + la red carga la batería'
     return out + [calibrate, grid]

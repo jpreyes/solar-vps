@@ -309,7 +309,13 @@ def control_enabled():
     import control
     if control.config()['mode']!='on':
         return jsonify(error='El control está en modo '+control.config()['mode']+'; cambia CONTROL_MODE=on en el VPS para activarlo.'),409
-    enabled=(request.get_json(silent=True) or {}).get('enabled')
+    data=request.get_json(silent=True) or {}
+    if data.get('clear_calibration_block') is True:
+        # Explicit owner action after an emergency stop of grid charging.
+        with connect() as db:
+            db.execute('UPDATE control_state SET calibration_blocked=NULL,updated_at=now() WHERE id=1')
+        return jsonify(ok=True)
+    enabled=data.get('enabled')
     if not isinstance(enabled,bool):
         raise ValueError('Indica enabled true o false')
     with connect() as db:

@@ -108,6 +108,8 @@ def init():
           paused_reason TEXT, request JSONB, last_target JSONB, last_params JSONB,
           params_at TIMESTAMPTZ, calibration_started TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         db.execute('INSERT INTO control_state(id) VALUES (1) ON CONFLICT DO NOTHING')
+        db.execute('ALTER TABLE control_state ADD COLUMN IF NOT EXISTS pre_calibration JSONB')
+        db.execute('ALTER TABLE control_state ADD COLUMN IF NOT EXISTS calibration_blocked TEXT')
         db.execute('''CREATE TABLE IF NOT EXISTS control_actions (
           id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(), mode TEXT NOT NULL,
           reason TEXT NOT NULL, commands JSONB NOT NULL, before JSONB, response_code TEXT,

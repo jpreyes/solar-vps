@@ -19,7 +19,7 @@ Actualizar en el VPS: `docker compose up -d --build` (las migraciones de tablas 
 
 ## Control automático de la batería (opcional)
 
-El servicio `control` puede cambiar desde el VPS, a través de la nube i.Solar, **solo tres ajustes**: SOC de vuelta a red (`PBCC`), SOC de vuelta a batería (`PBDC`) y prioridad del cargador (`PCP0`: 1 solar primero, 2 solar + red, 3 solo solar). El formato se obtuvo del JavaScript público del portal (pantalla de parámetros de la familia `prodId=30`, `subId=105`). No es una API documentada.
+El servicio `control` puede cambiar desde el VPS, a través de la nube i.Solar, **solo cinco ajustes**: SOC de vuelta a red (`PBCC`), SOC de vuelta a batería (`PBDC`), prioridad del cargador (`PCP0`: 1 solar primero, 2 solar + red, 3 solo solar), corriente de carga total (`MNCHGC`, programa 02) y corriente de carga desde la red (`MUCHGC`, programa 11). El formato se obtuvo del JavaScript público del portal (pantalla de parámetros de la familia `prodId=30`, `subId=105`). No es una API documentada.
 
 Regla por defecto: 20/30 todo el año, 40/50 en junio y julio, 40/50 ante temporal pronosticado (ráfagas ≥ 60 km/h hoy o mañana; ~13 días al año. Según los registros de la SEC para Valdivia 2025–2026, los días con más de 2.000 clientes sin luz pasan de ~3 % con ráfagas bajo 50 km/h a ≥ 50 % sobre 70 km/h, y la lluvia sola no mostró cortes grandes. El panel registra además los cortes que ve tu inversor para afinar el umbral), y, opcional (`CONTROL_CALIBRATION=1`, apagada por defecto), carga de calibración desde la red tras 10 días sin llegar al 100 %. Antes de activarla hay que comprobar, con supervisión, cuánta corriente toma realmente de la red: en algunos Voltronic el límite de carga desde la red (programa 11) se ignora y manda el límite total (programa 02). Todo es configurable con las variables `CONTROL_*`.
 
@@ -30,6 +30,8 @@ Salvaguardas:
 - Cada cambio se verifica leyendo los parámetros de vuelta; si el equipo no lo confirma, la automatización se pausa.
 - Si alguien cambia los ajustes desde el inversor, el portal o la app del fabricante, se detecta y la automatización se pausa.
 - La web no envía comandos: deja una solicitud que el servicio `control` valida y aplica. Los ajustes manuales del panel se mantienen las horas indicadas.
+- La carga desde la red (cargador 1 o 2) solo se habilita con **ambas** corrientes en `CONTROL_GRID_CHARGE_CAP_A` (30 A) o menos: algunos Voltronic ignoran el programa 11 y cargan desde la red hasta el programa 02. Orden seguro: primero se bajan las corrientes y luego se habilita la red; al terminar (batería llena 45 min o 08:00), primero se vuelve a "solo solar" y luego se restauran las corrientes. Esa vuelta a lo seguro nunca la frena el límite diario de comandos.
+- Durante la carga desde la red se lee la potencia en vivo cada 3 minutos; si supera `CONTROL_GRID_IMPORT_MAX_W` (7 kW), se restaura todo, se pausa la automatización y la carga desde la red queda bloqueada hasta que se permita de nuevo desde el panel.
 - Historial completo en la tabla `control_actions` y en el panel.
 
 Puesta en marcha recomendada:

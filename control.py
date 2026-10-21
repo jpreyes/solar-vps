@@ -1,9 +1,15 @@
 """Automatic battery settings through the i.Solar cloud (opt-in, guarded).
 
-Only three settings are ever written (see cloud.SETTING_COMMAND):
-  BCRC -> PBCCnnn  SOC % at which the inverter goes back to the grid
-  BCRD -> PBDCnnn  SOC % at which it goes back to the battery
-  PC   -> PCP0n    charger priority (1 solar first, 2 solar + utility, 3 solar only)
+Only these settings are ever written (see cloud.SETTING_COMMAND):
+  BCRC -> PBCCnnn    SOC % at which the inverter goes back to the grid
+  BCRD -> PBDCnnn    SOC % at which it goes back to the battery
+  PC   -> PCP0n      charger priority (1 solar first, 2 solar + utility, 3 solar only)
+  MCC  -> MNCHGCnnn  total battery charge current (A, program 02)
+  MCG  -> MUCHGCnnn  utility charge current (A, program 11)
+
+Grid charging (charger 1 or 2) is only ever enabled with BOTH current limits at or
+below CONTROL_GRID_CHARGE_CAP_A: some Voltronic units ignore program 11 and charge
+from the utility up to program 02, which could trip the house supply breaker.
 
 Modes (CONTROL_MODE): off (default, nothing runs), dry-run (decides and logs,
 never sends), on (sends, then reads back to verify). In "on" the panel switch
@@ -17,8 +23,9 @@ import analysis
 from cloud import Cloud, CloudError, SETTING_COMMAND
 from storage import connect, event, init
 
-KEYS = {'to_grid': 'BCRC', 'to_battery': 'BCRD', 'charger': 'PC'}
+KEYS = {'to_grid': 'BCRC', 'to_battery': 'BCRD', 'charger': 'PC', 'charge_a': 'MCC', 'grid_charge_a': 'MCG'}
 CHARGER = {1: 'solar primero', 2: 'solar + red', 3: 'solo solar'}
+GRID_CHARGERS = (1, 2)  # priorities that let the utility charge the battery
 
 
 def env_pair(name, default):
@@ -47,14 +54,22 @@ def config():
         'calibration_days': int(os.getenv('CONTROL_CALIBRATION_DAYS', '10')),
         'charger': int(os.getenv('CONTROL_CHARGER', '3')),
         'min_soc': int(os.getenv('CONTROL_MIN_SOC', '15')),
-        'max_commands_day': int(os.getenv('CONTROL_MAX_COMMANDS_DAY', '6')),
+        'max_commands_day': int(os.getenv('CONTROL_MAX_COMMANDS_DAY', '12')),
         'interval': int(os.getenv('CONTROL_INTERVAL_SECONDS', '900')),
         'max_data_age_min': int(os.getenv('CONTROL_MAX_DATA_AGE_MIN', '30')),
+        # Empty = keep the installer's value. Battery label: 150 A recommended, 200 A max.
+        'max_charge_a': int(os.getenv('CONTROL_MAX_CHARGE_A')) if os.getenv('CONTROL_MAX_CHARGE_A') else None,
+        'battery_max_a': int(os.getenv('CONTROL_BATTERY_MAX_A', '200')),
+        'grid_charge_idle_a': int(os.getenv('CONTROL_GRID_CHARGE_IDLE_A', '2')),
+        # 30 A DC ~ 1.6 kW ~ 8 A AC: with a 40 A supply and a 32 A house breaker the worst case stays <= 40 A.
+        'grid_charge_cap_a': int(os.getenv('CONTROL_GRID_CHARGE_CAP_A', '30')),
+        'grid_charge_a': min(int(os.getenv('CONTROL_GRID_CHARGE_A', '30')), int(os.getenv('CONTROL_GRID_CHARGE_CAP_A', '30'))),
+        'grid_import_max_w': float(os.getenv('CONTROL_GRID_IMPORT_MAX_W', '7000')),
     }
 
 
 def parse_param(raw):
-    """'20 5~50' -> value/min/max; '3 1,2,3' -> value/options; '20' -> value."""
+    """'20 5~50', '3 1,2,3', '2 2,10~180' -> value plus allowed options/ranges and overall min/max."""
     if raw is None:
         return None
     parts = str(raw).split(' ')
@@ -63,12 +78,30 @@ def parse_param(raw):
     except ValueError:
         return None
     out = {'value': int(value) if value.is_integer() else value}
-    if len(parts) > 1 and '~' in parts[1]:
-        low, high = parts[1].split('~')[:2]
-        out.update(min=float(low), max=float(high))
-    elif len(parts) > 1 and parts[1]:
-        out['options'] = [int(float(o)) for o in parts[1].split(',') if o.strip().lstrip('-').replace('.', '').isdigit()]
+    options, ranges = [], []
+    for piece in (parts[1].split(',') if len(parts) > 1 else []):
+        try:
+            if '~' in piece:
+                low, high = piece.split('~')[:2]
+                ranges.append((float(low), float(high)))
+            elif piece.strip():
+                options.append(int(float(piece)))
+        except ValueError:
+            continue
+    if options:
+        out['options'] = options
+    if ranges:
+        out['ranges'] = ranges
+    bounds = options + [v for r in ranges for v in r]
+    if bounds:
+        out.update(min=min(bounds), max=max(bounds))
     return out
+
+
+def allowed(value, info):
+    if not info or not (info.get('options') or info.get('ranges')):
+        return True
+    return value in info.get('options', []) or any(lo <= value <= hi for lo, hi in info.get('ranges', []))
 
 
 def current_settings(params):
@@ -91,14 +124,26 @@ def storm_ahead(forecast, cfg, now=None):
     return None
 
 
-def desired(cfg, now, insight, forecast, calibration_started, calibration_done, hold=None):
+def safe_currents(target, cfg):
+    """Grid-capable charger priorities always run with both current limits at the safe cap."""
+    if target['charger'] in GRID_CHARGERS:
+        target['charge_a'] = min(target.get('charge_a') or cfg['grid_charge_a'], cfg['grid_charge_a'])
+        target['grid_charge_a'] = cfg['grid_charge_a']
+    return target
+
+
+def desired(cfg, now, insight, forecast, calibration_started, calibration_done, hold=None, keep=None):
     """Target settings and the reason, from the season, the forecast and the BMS state.
 
     `hold` is a manual request from the panel that stays in force until its `hold_until`.
+    `keep` holds the current limits to restore (pre-calibration values) when not configured.
     """
+    keep = keep or {}
+    currents = {'charge_a': cfg['max_charge_a'] or keep.get('charge_a'), 'grid_charge_a': cfg['grid_charge_idle_a']}
     if hold and hold.get('hold_until') and datetime.fromisoformat(hold['hold_until']) > now:
-        return {**{k: hold[k] for k in KEYS}, 'calibrating': False, 'hold_until': hold['hold_until'],
-                'reason': f'Ajuste manual vigente hasta {datetime.fromisoformat(hold["hold_until"]).astimezone(analysis.tz()):%d-%m %H:%M}'}
+        return safe_currents({**currents, **{k: hold[k] for k in ('to_grid', 'to_battery', 'charger')},
+                              'calibrating': False, 'hold_until': hold['hold_until'],
+                              'reason': f'Ajuste manual vigente hasta {datetime.fromisoformat(hold["hold_until"]).astimezone(analysis.tz()):%d-%m %H:%M}'}, cfg)
     zone = analysis.tz()
     local = now.astimezone(zone)
     low, high = cfg['base']
@@ -110,18 +155,19 @@ def desired(cfg, now, insight, forecast, calibration_started, calibration_done, 
     if storm:
         low, high = max(low, cfg['winter'][0]), max(high, cfg['winter'][1])
         reason = f'Reserva por temporal {storm["date"]} (ráfagas {storm.get("gust_max_kmh", 0)} km/h)'
-    target = {'to_grid': low, 'to_battery': high, 'charger': cfg['charger'], 'reason': reason, 'calibrating': False}
+    target = {'to_grid': low, 'to_battery': high, 'charger': cfg['charger'], 'reason': reason, 'calibrating': False,
+              **currents}
     days = insight.get('days_since_full_charge')
+    # Grid charging is a night-time job: from 18-23 h until full (45 min >= 99 %) or 08:00.
     if cfg['calibration'] and calibration_started is not None:
-        done = calibration_done
-        expired = now - calibration_started > timedelta(hours=20)
-        if not (done or expired):
+        daytime = 8 <= local.hour < 18
+        if not (calibration_done or daytime or now - calibration_started > timedelta(hours=16)):
             target.update(to_battery=100, charger=2, calibrating=True,
                           reason=f'Carga de calibración en curso (desde {calibration_started.astimezone(zone):%d-%m %H:%M})')
     elif cfg['calibration'] and days is not None and days >= cfg['calibration_days'] and 18 <= local.hour < 23:
         target.update(to_battery=100, charger=2, calibrating=True,
                       reason=f'Carga de calibración: {days} días sin llegar al 100 %')
-    return target
+    return safe_currents(target, cfg)
 
 
 def validate(target, current, cfg):
@@ -145,23 +191,47 @@ def validate(target, current, cfg):
     charger = current.get('charger') or {}
     if target['charger'] not in CHARGER or (charger.get('options') and target['charger'] not in charger['options']):
         problems.append(f'Prioridad de cargador {target["charger"]} no disponible.')
+    for name in ('charge_a', 'grid_charge_a'):
+        value, info = target.get(name), current.get(name)
+        if value is None or info is None:
+            continue
+        if not allowed(value, info):
+            problems.append(f'{KEYS[name]}={value} A no lo acepta el equipo.')
+    if target.get('charge_a') is not None and not (10 <= target['charge_a'] <= cfg['battery_max_a']):
+        problems.append(f'Corriente de carga {target["charge_a"]} A fuera de 10–{cfg["battery_max_a"]} A (límite de la batería).')
+    if target['charger'] in GRID_CHARGERS:
+        if current.get('charge_a') is None or current.get('grid_charge_a') is None:
+            problems.append('El equipo no informa MCC/MCG: no se habilita la carga desde la red.')
+        elif target['charge_a'] > cfg['grid_charge_cap_a'] or target['grid_charge_a'] > cfg['grid_charge_cap_a']:
+            problems.append(f'Carga desde la red solo con MCC y MCG ≤ {cfg["grid_charge_cap_a"]} A (empalme de la vivienda).')
     return problems
 
 
 def plan(target, current):
-    commands = []
-    if current['to_grid']['value'] != target['to_grid']:
-        commands.append(f'PBCC{target["to_grid"]:03d}')
-    if current['to_battery']['value'] != target['to_battery']:
-        commands.append(f'PBDC{target["to_battery"]:03d}')
-    if (current.get('charger') or {}).get('value') != target['charger']:
-        commands.append(f'PCP0{target["charger"]}')
+    """Commands in a safe order: currents are lowered before grid charging is enabled,
+    and grid charging is disabled before currents are raised again."""
+    def differs(name):
+        return target.get(name) is not None and (current.get(name) or {}).get('value') != target[name]
+    thresholds = [f'PBCC{target["to_grid"]:03d}'] if differs('to_grid') else []
+    thresholds += [f'PBDC{target["to_battery"]:03d}'] if differs('to_battery') else []
+    charger = [f'PCP0{target["charger"]}'] if differs('charger') else []
+    total = [f'MNCHGC{target["charge_a"]:03d}'] if differs('charge_a') else []
+    grid = [f'MUCHGC{target["grid_charge_a"]:03d}'] if differs('grid_charge_a') else []
+    if target['charger'] in GRID_CHARGERS:
+        commands = total + grid + charger + thresholds
+    else:
+        commands = charger + grid + total + thresholds
     assert all(SETTING_COMMAND.fullmatch(c) for c in commands)
     return commands
 
 
 def snapshot(current):
     return {k: (current.get(k) or {}).get('value') for k in KEYS}
+
+
+def same(a, b):
+    """Compare only the settings both sides know (older targets lack the current limits)."""
+    return all(a.get(k) == b.get(k) for k in KEYS if a.get(k) is not None and b.get(k) is not None)
 
 
 def state(db):
@@ -190,7 +260,7 @@ def verify(client, sn, target, tries=10, wait=60, sleep=time.sleep):
     for _ in range(tries):
         sleep(wait)
         current = current_settings(client.params(sn))
-        if snapshot(current) == {k: target[k] for k in KEYS}:
+        if same(snapshot(current), target):
             return True, current
     return False, current
 
@@ -220,13 +290,30 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         request = st['request']
     # A manual change (inverter screen, portal, app) wins: pause until re-enabled from the panel.
     last = st['last_target']
-    if cfg['mode'] == 'on' and st['enabled'] and last and snapshot(current) != {k: last[k] for k in KEYS}:
+    if cfg['mode'] == 'on' and st['enabled'] and last and not same(snapshot(current), last):
         with connect() as db:
             db.execute('UPDATE control_state SET enabled=false, paused_reason=%s, last_target=NULL WHERE id=1',
                        ('Se detectó un cambio manual de los ajustes; automatización en pausa.',))
         event(False, 'Control: cambio manual detectado, automatización en pausa')
         return 'Cambio manual detectado: en pausa.'
-    target = desired(cfg, now, insight, analysis.forecast(), st['calibration_started'], calibration_done, st['last_target'])
+    # Emergency stop: while the grid may charge the battery, check the live grid draw.
+    abort = None
+    if cfg['mode'] == 'on' and st['calibration_started'] is not None:
+        try:
+            live = client.realtime(sn)
+            from storage import save
+            save(sn, 'realtime', live, {'deviceSn': sn})
+            draw = analysis.derive(live['data']).get('grid_import_w') or 0
+        except (CloudError, KeyError, TypeError):
+            draw = 0
+        if draw > cfg['grid_import_max_w']:
+            abort = f'Corte de emergencia: la red entregaba {draw:.0f} W (> {cfg["grid_import_max_w"]:.0f} W) durante la carga desde la red'
+    keep = st['pre_calibration'] or snapshot(current)
+    effective = cfg | {'calibration': False} if abort or st['calibration_blocked'] else cfg
+    target = desired(effective, now, insight, analysis.forecast(), None if abort else st['calibration_started'],
+                     calibration_done, st['last_target'], keep)
+    if abort:
+        target['reason'] = abort
     requested_at = datetime.fromisoformat(request['requested_at']) if request and request.get('requested_at') else now
     if request and now - requested_at > timedelta(hours=12):
         with connect() as db:
@@ -236,9 +323,9 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         request = None
     if request:
         hours = min(max(int(request.get('hours', 24)), 1), 24 * 14)
-        target = {**target, **{k: request[k] for k in KEYS if k in request}, 'calibrating': False,
-                  'hold_until': (now + timedelta(hours=hours)).isoformat(),
-                  'reason': f'Solicitud manual desde el panel: {request.get("label", "")} ({hours} h)'}
+        target = safe_currents({**target, **{k: request[k] for k in ('to_grid', 'to_battery', 'charger') if k in request},
+                                'calibrating': False, 'hold_until': (now + timedelta(hours=hours)).isoformat(),
+                                'reason': f'Solicitud manual desde el panel: {request.get("label", "")} ({hours} h)'}, cfg)
     problems = validate(target, current, cfg)
     commands = plan(target, current) if not problems else []
     with connect() as db:
@@ -260,9 +347,14 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         calibration = st['calibration_started']
         if target['calibrating'] and calibration is None:
             calibration = now
+            db.execute('UPDATE control_state SET pre_calibration=%s WHERE id=1', (Jsonb(snapshot(current)),))
         elif not target['calibrating']:
             calibration = None
         db.execute('UPDATE control_state SET calibration_started=%s WHERE id=1', (calibration,))
+        if abort:
+            db.execute('UPDATE control_state SET calibration_blocked=%s WHERE id=1', (abort,))
+        if not target['calibrating'] and st['pre_calibration'] and not commands:
+            db.execute('UPDATE control_state SET pre_calibration=NULL WHERE id=1')
         if not commands:
             done_with_request()
             if cfg['mode'] == 'on' and st['enabled']:
@@ -288,7 +380,10 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
             waiting('Equipo sin conexión (sin datos recientes); se reintentará')
             return f'Equipo sin conexión ({age}): no se envía' + (' (solicitud en espera).' if request else '.')
         done_with_request()
-        if commands_today(db) + len(commands) > cfg['max_commands_day']:
+        # Leaving grid charging (dawn, full battery or emergency stop) is never rate-limited.
+        to_safety = abort or ((current.get('charger') or {}).get('value') in GRID_CHARGERS
+                              and target['charger'] not in GRID_CHARGERS)
+        if not to_safety and commands_today(db) + len(commands) > cfg['max_commands_day']:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
     try:
@@ -306,7 +401,10 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         log_action(db, 'on', target['reason'], commands, snapshot(current), code, verified,
                    snapshot(after) if after else None,
                    None if verified and code == '0' else (f'Confirmado leyendo el equipo ({detail})' if verified else f'Sin confirmar ({detail})'))
-        if verified:
+        if verified and abort:
+            db.execute('UPDATE control_state SET enabled=false, last_target=NULL, paused_reason=%s WHERE id=1',
+                       (abort + '; se restauró la configuración normal y la automatización quedó en pausa.',))
+        elif verified:
             db.execute('UPDATE control_state SET last_target=%s, paused_reason=NULL WHERE id=1', (Jsonb(target),))
         else:
             db.execute('UPDATE control_state SET enabled=false, last_target=NULL, paused_reason=%s WHERE id=1',
@@ -336,9 +434,12 @@ def run(stop=None):
             if stop is None:
                 time.sleep(60)
             with connect() as db:
-                pending = state(db)['request']
+                st = state(db)
+            pending = st['request']
             if pending and (not pending.get('waiting') or minute % 3 == 0):
                 break
+            if st['calibration_started'] is not None and minute % 3 == 0:
+                break  # watch the grid draw closely while the utility may charge
 
 
 def main():
@@ -361,8 +462,7 @@ def main():
         for name, key in KEYS.items():
             print(f'  {key:5s} {name:10s} {params.get(key)!r}')
         # Read-only: charge/discharge current limits vs the battery (150 A recommended, 200 A max).
-        for key, label in (('MCC', 'corriente máx. de carga total (A)'), ('MCG', 'corriente máx. de carga desde la red (A)'),
-                           ('MDC', 'corriente máx. de descarga (A)'), ('BCU', 'corte por SOC bajo (%)'),
+        for key, label in (('MDC', 'corriente máx. de descarga (A)'), ('BCU', 'corte por SOC bajo (%)'),
                            ('EQ', 'ecualización (debe estar en 0 con LiFePO4)')):
             if key in params:
                 print(f'  {key:5s} {label:42s} {params.get(key)!r}')
