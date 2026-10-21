@@ -79,7 +79,7 @@ Configuración actual (PV1 25° este + PV2 40° este), batería de 15,36 kWh, ta
 | **20/30 + carga de calibración desde la red** (una noche al 100 % tras 10 días sin llenarse) | 429 | 30 | 25 % | **9 d (10)** | 12,1 / 18,1 años | $185.000 |
 | 20/30 + la red carga la batería siempre (“solar + red”, 3 kW) | 478 | 367 | 24 % | 19 d (27) | 11,7 / 17,5 años | $206.000 |
 | 40/50 + la red carga siempre | 573 | 443 | 35 % | 10 d (21) | 11,4 / 17,2 años | ≈ $230.000 |
-| Respaldo puro: 90/100 + red (batería siempre llena) | 2.185 | 1.409 | 100 % | 0 | 11,2 / 16,8 años | ≈ $600.000 |
+| Respaldo puro: 90/100 + red (batería siempre llena) | 2.185 | 1.409 | 100 % | 0 | 11,2 / 16,8 años | ≈ $570.000 |
 
 \* Red a $230/kWh más desgaste de batería a $45/kWh entregado.
 
