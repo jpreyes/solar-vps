@@ -52,3 +52,7 @@ nav.side a{flex-direction:column;gap:2px;padding:6px 4px;font-size:11px}.sidesum
 .card:first-child{background:var(--surface);color:var(--ink)}.card .label,.card .sub{color:var(--muted)}
 .tag{background:var(--accent-bg);color:var(--accent);border:0}
 .opt.sel{box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-bg)}
+.chartwrap{position:relative}.tip{position:absolute;top:8px;width:220px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,.18);pointer-events:none;z-index:2}
+.tip b{display:block;margin-bottom:6px;font-size:13px}.tip div{display:flex;justify-content:space-between;gap:8px;line-height:1.7}.tip div span:first-child{color:var(--muted)}
+.totals.today{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}.totals.today .head{background:var(--accent-bg);display:flex;align-items:center}.totals.today .head b{color:var(--accent);font-size:14px}
+.tip{width:250px}.tip div span{white-space:nowrap}

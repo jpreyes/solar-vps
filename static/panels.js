@@ -25,7 +25,7 @@ async function updateAlerts(){
 async function updateDaily(){
   const days=Number(document.getElementById('dailyRange').value),end=new Date(),start=new Date(end.getTime()-days*86400000);
   const r=await solarRequest('/api/daily?'+new URLSearchParams({start:start.toISOString(),end:end.toISOString()}));
-  dailyRows=r.days;drawDaily();
+  dailyRows=r.days;drawDaily();renderToday();
   const sum=k=>dailyRows.reduce((a,d)=>a+(d[k]||0),0),load=sum('load_kwh'),grid=sum('grid_kwh');
   const full=dailyRows.filter(d=>d.covered_hours>=20);
   document.getElementById('dailyTotals').replaceChildren(...[
@@ -34,23 +34,61 @@ async function updateDaily(){
     ['Consumo medio',full.length?fmt(full.reduce((a,d)=>a+d.load_kwh*24/d.covered_hours,0)/full.length)+' kWh/día':'—'],
     ['Batería entregó',fmt(sum('battery_out_kwh'))+' kWh']].map(([k,v])=>el('div',{},el('span',{},k),el('b',{},v))));
 }
+let dailyGeom=null;
+function localToday(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Santiago'}).format(new Date())}
+function dayLabel(date){
+  const today=localToday(),y=new Date(today+'T12:00:00');y.setDate(y.getDate()-1);
+  if(date===today)return 'Hoy';if(date===y.toISOString().slice(0,10))return 'Ayer';
+  const [yy,mm,dd]=date.split('-');return +dd+' '+MONTHS[+mm-1];
+}
+function untilText(d){return d.until?new Date(d.until).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'}):'—'}
 function drawDaily(){
   if(!document.getElementById('dailyChart'))return;
-  const [c,w]=canvasContext('dailyChart',260),left=46,right=w-12,top=14,bottom=222,rows=dailyRows;
-  if(!rows.length){c.fillStyle=themeVar('--muted','#6b8078');c.fillText('Sin días con datos todavía.',left,120);return}
+  const [c,w]=canvasContext('dailyChart',260),left=46,right=w-12,top=14,bottom=222,rows=dailyRows,today=localToday();
+  const muted=themeVar('--muted','#6b8078'),accent=themeVar('--accent','#167a76');
+  if(!rows.length){c.fillStyle=muted;c.fillText('Sin días con datos todavía.',left,120);dailyGeom=null;return}
   const max=Math.max(1,...rows.flatMap(d=>[d.pv_kwh,d.load_kwh,d.grid_kwh,d.pv_expected_kwh||0]))*1.1,y=v=>bottom-v/max*(bottom-top);
-  for(let i=0;i<=4;i++){const v=max*i/4;c.strokeStyle=themeVar('--line','#e5ece6');c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
+  for(let i=0;i<=4;i++){const v=max*i/4;c.strokeStyle=themeVar('--line','#e5ece6');c.beginPath();c.moveTo(left,y(v));c.lineTo(right,y(v));c.stroke();c.fillStyle=muted;c.textAlign='right';c.fillText(fmt(v,0),left-6,y(v)+4)}
   const slot=(right-left)/rows.length,bar=Math.max(1,Math.min(14,slot/4));
+  const every=Math.ceil(rows.length/Math.max(2,Math.floor((right-left)/48)));
   rows.forEach((d,i)=>{
-    const x0=left+i*slot+slot/2-bar*1.5;
-    [['pv_kwh',PANEL_COLORS.pv],['load_kwh',PANEL_COLORS.load],['grid_kwh',PANEL_COLORS.grid]].forEach(([k,color],j)=>{c.fillStyle=color;c.globalAlpha=d.covered_hours<20?.45:1;c.fillRect(x0+j*bar,y(d[k]||0),bar-1,bottom-y(d[k]||0))});
+    const x0=left+i*slot+slot/2-bar*1.5,isToday=d.date===today;
+    if(isToday){c.fillStyle=themeVar('--accent-bg','#e5f3f1');c.globalAlpha=.45;c.fillRect(left+i*slot+1,top,slot-2,bottom-top);c.globalAlpha=1}
+    // Only past incomplete days (data gaps) are faded; today is shown normally and labelled.
+    [['pv_kwh',PANEL_COLORS.pv],['load_kwh',PANEL_COLORS.load],['grid_kwh',PANEL_COLORS.grid]].forEach(([k,color],j)=>{c.fillStyle=color;c.globalAlpha=!isToday&&d.covered_hours<20?.45:1;c.fillRect(x0+j*bar,y(d[k]||0),bar-1,bottom-y(d[k]||0))});
     c.globalAlpha=1;
     if(d.pv_expected_kwh!==null&&d.covered_hours>=20){c.strokeStyle=PANEL_COLORS.expected;c.lineWidth=2;c.beginPath();c.moveTo(x0-2,y(d.pv_expected_kwh));c.lineTo(x0+bar*3+1,y(d.pv_expected_kwh));c.stroke();c.lineWidth=1}
-    const every=Math.ceil(rows.length/Math.max(2,Math.floor((right-left)/48)));
-    if(i%every===0){c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='center';const [yy,mm,dd]=d.date.split('-');c.fillText(dd+' '+MONTHS[+mm-1],left+i*slot+slot/2,bottom+16)}
+    if(isToday||i%every===0){c.fillStyle=isToday?accent:muted;c.font=isToday?'600 11px system-ui':'11px system-ui';c.textAlign='center';c.fillText(dayLabel(d.date),left+i*slot+slot/2,bottom+16);if(isToday){c.font='10px system-ui';c.fillText('hasta '+untilText(d),left+i*slot+slot/2,bottom+30)}c.font='11px system-ui'}
   });
-  c.fillStyle=themeVar('--muted','#6b8078');c.textAlign='left';c.fillText('kWh',4,top+4);
+  c.fillStyle=muted;c.textAlign='left';c.fillText('kWh',4,top+4);
+  dailyGeom={left,slot,rows};
 }
+function renderToday(){
+  const box=document.getElementById('todayTiles');if(!box)return;
+  const d=dailyRows.find(r=>r.date===localToday());
+  if(!d){box.replaceChildren(el('div',{},el('span',{},'Hoy'),el('b',{},'sin datos todavía')));return}
+  box.replaceChildren(...[['Hoy · hasta '+untilText(d),''],['Solar',fmt(d.pv_kwh)+' kWh'],['Consumo',fmt(d.load_kwh)+' kWh'],['Red',fmt(d.grid_kwh)+' kWh'],
+    ['Batería entregó',fmt(d.battery_out_kwh)+' kWh'],['Batería mín / máx',fmt(d.soc_min,0)+' / '+fmt(d.soc_max,0)+' %']]
+    .map(([k,v],i)=>i===0?el('div',{class:'head'},el('b',{},k)):el('div',{},el('span',{},k),el('b',{},v))));
+}
+function dailyTip(event){
+  const tip=document.getElementById('dailyTip'),canvas=document.getElementById('dailyChart');
+  if(!dailyGeom||!tip)return;
+  const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,i=Math.floor((x-dailyGeom.left)/dailyGeom.slot),d=dailyGeom.rows[i];
+  if(!d){tip.hidden=true;return}
+  const isToday=d.date===localToday();
+  const lines=[[isToday?'Hoy (hasta '+untilText(d)+')':dayLabel(d.date)+(d.covered_hours<20?' · datos incompletos ('+fmt(d.covered_hours,0)+' h)':''),''],
+    ['Solar',fmt(d.pv_kwh)+' kWh'],['Solar esperado',d.pv_expected_kwh===null||d.covered_hours<20?'—':fmt(d.pv_expected_kwh)+' kWh'],
+    ['Consumo',fmt(d.load_kwh)+' kWh'],['Red importada',fmt(d.grid_kwh)+' kWh'],['Batería cargó / entregó',fmt(d.battery_in_kwh)+' / '+fmt(d.battery_out_kwh)+' kWh'],
+    ['Batería mín / máx',fmt(d.soc_min,0)+' / '+fmt(d.soc_max,0)+' %'],['Horas en modo red',fmt(d.grid_mode_hours)+' h']];
+  tip.replaceChildren(...lines.map(([k,v],j)=>j===0?el('b',{},k):el('div',{},el('span',{},k),el('span',{},v))));
+  tip.hidden=false;
+  const left=Math.min(Math.max(0,dailyGeom.left+i*dailyGeom.slot+dailyGeom.slot/2-110),rect.width-260);
+  tip.style.left=left+'px';
+}
+(function(){const canvas=document.getElementById('dailyChart');if(!canvas)return;
+  canvas.addEventListener('pointermove',dailyTip);canvas.addEventListener('pointerdown',dailyTip);
+  canvas.addEventListener('pointerleave',()=>{const t=document.getElementById('dailyTip');if(t)t.hidden=true})})();
 
 function adviceFor(day,loadKwh){
   if((day.gust_max_kmh||0)>=60)return ['warn','Viento fuerte (ráfagas '+fmt(day.gust_max_kmh,0)+' km/h): conviene reserva de batería 40/50 ante posibles cortes.'];

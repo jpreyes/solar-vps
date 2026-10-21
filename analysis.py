@@ -116,7 +116,9 @@ def daily_energy(series):
             'battery_in_kwh': 'battery_charge_w', 'battery_out_kwh': 'battery_discharge_w'}
     totals = {name: integrate(series, key) for name, key in keys.items()}
     zone = tz()
-    info = defaultdict(lambda: {'soc_min': None, 'soc_max': None, 'grid_mode_hours': 0.0, 'covered_hours': 0.0})
+    info = defaultdict(lambda: {'soc_min': None, 'soc_max': None, 'grid_mode_hours': 0.0, 'covered_hours': 0.0, 'until': None})
+    for t, _ in series:
+        info[t.astimezone(zone).date()]['until'] = t.isoformat()
     for (t0, a), (t1, _) in zip(series, series[1:]):
         dt = (t1 - t0).total_seconds()
         day = info[t0.astimezone(zone).date()]
