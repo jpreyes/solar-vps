@@ -56,3 +56,4 @@ nav.side a{flex-direction:column;gap:2px;padding:6px 4px;font-size:11px}.sidesum
 .tip b{display:block;margin-bottom:6px;font-size:13px}.tip div{display:flex;justify-content:space-between;gap:8px;line-height:1.7}.tip div span:first-child{color:var(--muted)}
 .totals.today{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}.totals.today .head{background:var(--accent-bg);display:flex;align-items:center}.totals.today .head b{color:var(--accent);font-size:14px}
 .tip{width:250px}.tip div span{white-space:nowrap}
+.pausednote{flex-basis:100%;margin:6px 0 0;padding:10px 12px;border-radius:10px;background:var(--warn-bg);color:var(--warn);font-size:13px}

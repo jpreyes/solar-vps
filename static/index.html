@@ -33,7 +33,7 @@
 
 <section class="view" data-view="bateria">
 <div class="panel now"><div><span class="lbl">Ajuste actual del inversor</span><div class="big" id="bNow">— / —</div><span class="small muted">pasa a red / vuelve a batería · <span id="bCharger">—</span></span></div>
-<div class="right"><span class="lbl">Próximo cambio automático</span><div id="bNext">—</div><span id="bAuto" class="tag">—</span></div></div>
+<div class="right"><span class="lbl">Próximo cambio automático</span><div id="bNext">—</div><span id="bAuto" class="tag">—</span></div><p id="bPaused" class="pausednote" hidden></p></div>
 <h3 class="subhead">Elige una estrategia</h3>
 <div id="strategyCards" class="optcards"></div>
 <div class="panel"><div class="panelhead"><h2>Personalizar</h2><span class="small muted">estimación con la climatología de Valdivia</span></div>
@@ -43,7 +43,7 @@
 <label class="switch"><input type="checkbox" id="ruleStorm" checked><span></span>Reserva por viento: 40/50 con ráfagas ≥ <b id="gustLimit">60</b> km/h</label></div>
 <div class="tiles" id="estimate"><div><span>Red al año</span><b id="eGrid">—</b></div><div><span>Costo al año</span><b id="eCost">—</b></div><div><span>Reserva ante cortes</span><b id="eRes">—</b></div><div><span>Días al 100 % jun–jul</span><b id="eFull">—</b></div></div>
 <p id="bWarn" class="warntext" role="alert"></p>
-<div class="actions"><span id="bSel" class="small muted">Seleccionado: —</span><button id="saveRules" class="primary">Aplicar con la automatización</button></div>
+<div class="actions"><span id="bSel" class="small muted">Seleccionado: —</span><button id="saveRules" class="primary">Guardar y activar automatización</button></div>
 <p id="bDone" class="small muted" role="status"></p></div>
 <details class="panel"><summary>Historial de cambios y ajustes temporales</summary><div class="control"><div class="panelhead"><div><p class="eyebrow">CONTROL AUTOMÁTICO</p><h2>Ajustes de la batería desde la app</h2></div><span id="controlMode" class="tag">—</span></div>
 <p id="controlSummary" class="muted">Cargando…</p>

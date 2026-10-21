@@ -188,7 +188,13 @@ def insights():
 def strategy():
     now=datetime.now(timezone.utc)
     series=analysis.samples(now-timedelta(days=400),now)
-    study=analysis.strategy_study(series,analysis.inferred_thresholds(series))
+    # "Current" = what the inverter reports now; fall back to thresholds inferred from mode switches.
+    with connect() as db:
+        st=db.execute('SELECT last_params FROM control_state WHERE id=1').fetchone()
+    p=(st or {}).get('last_params') or {}
+    current=({'to_grid_soc':p['to_grid'],'to_battery_soc':p['to_battery']} if p.get('to_grid') is not None and p.get('to_battery') is not None
+             else analysis.inferred_thresholds(series))
+    study=analysis.strategy_study(series,current)
     return jsonify(study=study,forecast=analysis.forecast())
 
 

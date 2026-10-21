@@ -4,7 +4,7 @@
   const clp=v=>v===null||v===undefined?'—':'$'+Math.round(v).toLocaleString('es-CL');
   const PRESETS=[
     {key:'balanced',title:'Equilibrada',pill:'Recomendada',low:20,high:30,winter:true,match:r=>r.name.includes('40/50 jun–jul')},
-    {key:'cheap',title:'Más barata',low:20,high:30,winter:false,match:r=>r.name==='20/30'},
+    {key:'cheap',title:'Más barata',low:20,high:30,winter:false,match:r=>r.name==='20/30'||r.name==='20/30 (actual)'},
     {key:'reserve',title:'Más reserva',low:40,high:50,winter:false,match:r=>r.name==='40/50'}];
   let timer=null,lastQuery='',selected=null,loaded=false;
   function setSel(text){$('bSel').textContent='Seleccionado: '+text}
@@ -42,7 +42,7 @@
     }
   }
   function nextChange(cfg,enabled){
-    if(!enabled)return 'Ninguno: automatización en pausa';
+    if(!enabled)return 'Ninguno mientras la automatización esté en pausa';
     const m=new Date().getMonth()+1,months=cfg.winter_months||[];
     const [wl,wh]=cfg.winter,[bl,bh]=cfg.base;
     if(!months.length)return 'Sin cambios por temporada'+(cfg.storm?' · 40/50 si hay ráfagas fuertes':'');
@@ -56,7 +56,13 @@
     $('bNow').textContent=(p.to_grid??'—')+' / '+(p.to_battery??'—');
     $('bCharger').textContent=ctl.charger_labels[p.charger]||'cargador —';
     $('bAuto').textContent=ctl.mode!=='on'?'Control '+({off:'apagado','dry-run':'en simulación'}[ctl.mode]||ctl.mode):st.enabled?'Automatización activa':'Automatización en pausa';
-    $('bNext').textContent=nextChange(cfg,ctl.mode==='on'&&st.enabled);
+    const active=ctl.mode==='on'&&st.enabled;
+    $('bNext').textContent=nextChange(cfg,active);
+    const note=$('bPaused');
+    if(active){note.hidden=true}
+    else{note.hidden=false;note.textContent=(ctl.mode!=='on'?'El control del VPS no está en modo activo (CONTROL_MODE='+ctl.mode+'). ':'')+
+      (st.paused_reason?'Pausada: '+st.paused_reason+' ':'')+
+      'Mientras esté en pausa no cambia nada sola (por ejemplo, no pasará a 40/50 en junio). Revisa la estrategia y aprieta “Guardar y activar automatización”.'}
     $('gustLimit').textContent=fmt(cfg.storm_gust_kmh,0);
     const side=$('sideLink');if(side)side.textContent=p.cloud_online===true?'online':p.cloud_online===false?'offline':'—';
     if(!loaded){
@@ -71,10 +77,10 @@
   $('saveRules').addEventListener('click',()=>run(async()=>{
     const v=values(),w=check(v);if(w){$('bWarn').textContent=w;return}
     const text=v.low+'/'+v.high+(v.winter?', 40/50 en junio–julio':'')+(v.storm?', reserva por viento':'');
-    if(!confirm('¿Aplicar '+text+'? La automatización ajustará el inversor y lo mantendrá así.'))return;
+    if(!confirm('¿Guardar '+text+' y activar la automatización? Desde ahora el VPS ajustará el inversor solo: hoy al umbral que corresponda y cada temporada (por ejemplo, 40/50 el 1 de junio y de vuelta el 1 de agosto).'))return;
     $('bDone').textContent='Guardando…';
     try{await solarRequest('/api/control/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base:[v.low,v.high],winter:v.winter,storm:v.storm,enabled:true})});
-      $('bDone').textContent='Guardado. El servicio de control lo aplicará al inversor en los próximos minutos y lo verificará.'}
+      $('bDone').textContent='Guardado y automatización activa. El VPS ajustará el inversor en los próximos minutos y lo verificará.'}
     catch(error){$('bDone').textContent=error.message}
     loaded=false;await load();if(typeof updateControl==='function')updateControl().catch(()=>{});
   }));

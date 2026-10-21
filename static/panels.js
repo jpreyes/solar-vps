@@ -14,8 +14,8 @@ async function updateAlerts(){
   box.replaceChildren(...items);box.hidden=!(box.dataset.open==='1'&&items.length);
   const count=document.getElementById('alertCount');if(count){count.textContent=items.length;count.classList.toggle('on',items.some(i=>i.className.includes('warning')))}
   const t=r.thresholds||{},facts=[];
-  if(t.to_grid_soc!==null&&t.to_grid_soc!==undefined)facts.push(['Pasa a red al',fmt(t.to_grid_soc,0)+' %']);
-  if(t.to_battery_soc!==null&&t.to_battery_soc!==undefined)facts.push(['Vuelve a batería al',fmt(t.to_battery_soc,0)+' %']);
+  if(t.to_grid_soc!==null&&t.to_grid_soc!==undefined)facts.push(['Pasó a red al (observado, 30 días)',fmt(t.to_grid_soc,0)+' %']);
+  if(t.to_battery_soc!==null&&t.to_battery_soc!==undefined)facts.push(['Volvió a batería al (observado)',fmt(t.to_battery_soc,0)+' %']);
   if(r.capacity_nominal_kwh)facts.push(['Batería (placa)',fmt(r.capacity_nominal_kwh)+' kWh']);
   if(r.capacity_kwh)facts.push(['Capacidad aparente por SOC',fmt(r.capacity_kwh)+' kWh']);
   if(r.days_since_full_charge!==null&&r.days_since_full_charge!==undefined)facts.push(['Última carga al 100 %','hace '+r.days_since_full_charge+' días']);
@@ -109,7 +109,7 @@ async function updateStrategy(){
   const seasonal=results.find(x=>x.name.includes('40/50 invierno'));
   const parts=['Simulación hora a hora con '+fmt(s.years,0)+' años de radiación de Valdivia sobre el plano de tus paneles, '+fmt(s.system.pv_kwp)+' kWp limitado a '+fmt(s.system.ac_limit_kw)+' kW, batería de '+fmt(s.system.capacity_kwh)+' kWh y tu consumo '+(s.load_measured_months.length?'medido':'estimado')+'.'];
   parts.push('Menor costo: '+best.name+' ('+fmt(best.grid_kwh_year,0)+' kWh/año de red).');
-  if(current&&current.name!==best.name)parts.push('Tu configuración actual ('+current.name.replace(' (actual)','')+') usaría '+fmt(current.grid_kwh_year-best.grid_kwh_year,0)+' kWh/año más de red (≈ $'+fmt(current.cost_clp_year-best.cost_clp_year,0)+').');
+  if(current&&current.name!==best.name)parts.push('El ajuste actual del inversor ('+current.name.replace(' (actual)','')+') usaría '+fmt(current.grid_kwh_year-best.grid_kwh_year,0)+' kWh/año más de red (≈ $'+fmt(current.cost_clp_year-best.cost_clp_year,0)+').');
   const junjul=results.find(x=>x.name.includes('jun–jul'));
   if(junjul)parts.push('40/50 solo en junio–julio cuesta ≈ $'+fmt(junjul.cost_clp_year-best.cost_clp_year,0)+'/año: no ahorra, pero guarda reserva ante cortes y lleva la batería al 100 % '+fmt(junjul.winter_full_days*100,0)+' % de los días de invierno (vs '+fmt(best.winter_full_days*100,0)+' %), lo que ayuda a balancear celdas y calibrar el SOC.');
   const calib=results.find(x=>x.name.includes('calibración')),gridc=results.find(x=>x.name.includes('la red carga'));

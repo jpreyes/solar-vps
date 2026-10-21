@@ -454,7 +454,7 @@ def estimate_thresholds(low, high, winter=None, winter_months=(6, 7)):
 
 def strategy_study(series=None, current=None, now=None):
     """Simulate SOC thresholds over the archived climate with the measured load."""
-    key = int((now or time.time()) // 3600)
+    key = (int((now or time.time()) // 3600), (current or {}).get('to_grid_soc'), (current or {}).get('to_battery_soc'))
     if key in _cache:
         return _cache[key]
     with connect() as db:
@@ -472,8 +472,10 @@ def strategy_study(series=None, current=None, now=None):
     tariff, wear = env_float('GRID_TARIFF_CLP_KWH', '230'), env_float('BATTERY_WEAR_CLP_KWH', '45')
     strategies = candidate_strategies()
     if current and current.get('to_grid_soc') is not None and current.get('to_battery_soc') is not None:
-        strategies.insert(0, Strategy.fixed(int(round(current['to_grid_soc'])), int(round(current['to_battery_soc']))))
-        strategies[0].name += ' (actual)'
+        actual = Strategy.fixed(int(round(current['to_grid_soc'])), int(round(current['to_battery_soc'])))
+        strategies = [s for s in strategies if s.name != actual.name]
+        actual.name += ' (actual)'
+        strategies.insert(0, actual)
     results = []
     for strategy in strategies:
         trace = []
