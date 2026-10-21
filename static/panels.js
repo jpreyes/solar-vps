@@ -104,6 +104,7 @@ async function updateControl(){
   if(st.paused_reason)parts.push('⚠ '+st.paused_reason);
   document.getElementById('controlSummary').textContent=parts.join(' ');
   const facts=[];
+  if(p&&p.cloud_online!==undefined&&p.cloud_online!==null)facts.push(['Conexión de comandos',p.cloud_online?'online':'⚠ offline (reinicia el datalogger WiFi)']);
   if(p){facts.push(['Inversor: vuelta a red',fmt(p.to_grid,0)+' %'],['Inversor: vuelta a batería',fmt(p.to_battery,0)+' %'],['Cargador',labels[p.charger]||String(p.charger)],['Umbrales por SOC',p.soc_mode?'sí':'no ('+p.battery_type+')'])}
   if(st.params_at)facts.push(['Leído',new Date(st.params_at).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})]);
   if(st.last_target)facts.push(['Objetivo',st.last_target.to_grid+'/'+st.last_target.to_battery+' · '+(labels[st.last_target.charger]||'')],['Motivo',st.last_target.reason]);

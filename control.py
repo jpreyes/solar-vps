@@ -194,6 +194,10 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
     if cfg['mode'] not in ('dry-run', 'on'):
         return 'Control apagado (CONTROL_MODE=off).'
     current = current_settings(client.params(sn))
+    try:
+        link = client.device_status(sn)
+    except (CloudError, AttributeError):
+        link = {'online': None, 'updated': None}
     series = analysis.samples(now - timedelta(days=30), now)
     insight = analysis.insights(series, now)
     # Calibration ends after 45 min at >= 99 % so the BMS can top-balance the cells.
@@ -203,7 +207,8 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         st = state(db)
         db.execute('UPDATE control_state SET last_params=%s, params_at=now(), updated_at=now() WHERE id=1',
                    (Jsonb(snapshot(current) | {'soc_mode': current['soc_mode'], 'battery_type': current['battery_type'],
-                                                'ranges': {k: current[k] for k in KEYS}}),))
+                                                'ranges': {k: current[k] for k in KEYS},
+                                                'cloud_online': link['online'], 'cloud_updated': link['updated']}),))
         request = st['request']
     # A manual change (inverter screen, portal, app) wins: pause until re-enabled from the panel.
     last = st['last_target']
@@ -240,6 +245,10 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         if cfg['mode'] == 'dry-run' or not (st['enabled'] or request):
             log_action(db, 'dry-run', target['reason'], commands, snapshot(current))
             return 'Simulación: enviaría ' + ', '.join(commands)
+        if link['online'] is False:
+            log_action(db, 'on', target['reason'], commands, snapshot(current),
+                       error='La nube marca el equipo offline: no acepta comandos aunque lleguen datos; se reintentará')
+            return 'Equipo offline en la nube: no se envía.'
         # The cloud accepts commands for an offline datalogger but cannot deliver them (seen as 799011).
         last_seen = series[-1][0] if series else None
         if last_seen is None or now - last_seen > timedelta(minutes=cfg['max_data_age_min']):
@@ -310,6 +319,9 @@ def main():
         params = client.params(sn)
         current = current_settings(params)
         print('Tipo de batería (BT):', current['battery_type'], '· umbrales por SOC:', current['soc_mode'])
+        link = client.device_status(sn)
+        print('Conexión con la nube (acepta comandos):', {True: 'online', False: 'OFFLINE', None: 'desconocida'}[link['online']],
+              '· última actualización:', link['updated'])
         for name, key in KEYS.items():
             print(f'  {key:5s} {name:10s} {params.get(key)!r}')
         print('Parámetros informados por el equipo:', ', '.join(sorted(params)))

@@ -86,3 +86,14 @@ class CloudWriteTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DeviceStatusTests(unittest.TestCase):
+    def test_online_status_is_read_from_device_list(self):
+        session = Mock()
+        session.post.return_value = Mock(status_code=200, json=Mock(return_value={'code': 0, 'data': {'list': [
+            {'deviceSn': 'OTHER', 'onlineStatus': 1}, {'deviceSn': 'SN', 'onlineStatus': 0, 'modifyTime': '2026-10-21 11:00:00'}]}}))
+        client = Cloud('u', 'p', session)
+        client.token = 'T'
+        self.assertEqual(client.device_status('SN'), {'online': False, 'updated': '2026-10-21 11:00:00'})
+        self.assertEqual(client.device_status('MISSING')['online'], None)

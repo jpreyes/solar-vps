@@ -21,7 +21,8 @@ REAL = '/api/admin/realData/getRealByDeviceSn'
 HISTORY = '/api/admin/workInfo/getHistoricalData'
 PARAM_GET = '/api/admin/paramSet/getParam'
 PARAM_SET = '/api/admin/paramSet/setParam'
-READ_PATHS = (REAL, HISTORY, PARAM_GET)
+DEVICES = '/api/admin/deviceUser/getMyDevice'
+READ_PATHS = (REAL, HISTORY, PARAM_GET, DEVICES)
 # PBCC = back to grid at SOC %, PBDC = back to battery at SOC %, PCP0n = charger priority
 # (1 solar first, 2 solar + utility, 3 solar only). Format taken from the portal bundle.
 SETTING_COMMAND = re.compile(r'(PBCC\d{3}|PBDC\d{3}|PCP0[123])')
@@ -124,6 +125,19 @@ class Cloud:
         if not isinstance(result.get('data'), dict) or not result['data']:
             raise CloudError('Parámetros vacíos o formato desconocido')
         return result['data']
+
+    def device_status(self, sn):
+        """Cloud link of the datalogger: onlineStatus 1/0 as shown by the portal.
+
+        Readings can keep arriving while the live command channel is down; the portal then
+        shows the device offline and refuses settings ("设备离线，无法发送命令")."""
+        result = self.read(DEVICES, {'pageNum': 1, 'pageSize': 200})
+        rows = (result.get('data') or {}).get('list') or []
+        row = next((r for r in rows if isinstance(r, dict) and str(r.get('deviceSn')) == str(sn)), None)
+        if row is None:
+            return {'online': None, 'updated': None}
+        status = row.get('onlineStatus')
+        return {'online': None if status is None else str(status) == '1', 'updated': row.get('modifyTime')}
 
     def send_settings(self, sn, commands):
         """Send up to three whitelisted battery commands. Returns (code, vendor message).
