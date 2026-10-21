@@ -267,8 +267,14 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
             return 'Sin cambios: ' + target['reason']
         if cfg['mode'] == 'dry-run' or not (st['enabled'] or request):
             done_with_request()
-            log_action(db, 'dry-run', target['reason'], commands, snapshot(current))
-            return 'Simulación: enviaría ' + ', '.join(commands)
+            # dry-run mode, or mode "on" with the automation paused: record what it would do,
+            # once per decision rather than every cycle.
+            mode = 'dry-run' if cfg['mode'] == 'dry-run' else 'paused'
+            last_row = db.execute('SELECT mode,reason,commands FROM control_actions ORDER BY id DESC LIMIT 1').fetchone()
+            if not (last_row and last_row['mode'] == mode and last_row['reason'] == target['reason']
+                    and last_row['commands'] == commands):
+                log_action(db, mode, target['reason'], commands, snapshot(current))
+            return ('Simulación' if mode == 'dry-run' else 'Automatización en pausa') + ': enviaría ' + ', '.join(commands)
         if link['online'] is False:
             waiting('La nube marca el equipo offline: no acepta comandos aunque lleguen datos; se reintentará')
             return 'Equipo offline en la nube: no se envía' + (' (solicitud en espera).' if request else '.')
@@ -319,16 +325,17 @@ def run(stop=None):
                 print(step(client, sn, cfg), flush=True)
             except Exception as exc:
                 print('Error de control: ' + (str(exc) if isinstance(exc, CloudError) else type(exc).__name__), flush=True)
-        # Check for panel requests every minute; full cycle every `interval`.
-        for _ in range(max(1, cfg['interval'] // 60)):
+        # New panel requests are picked up within a minute; a request waiting for the device
+        # to come back online is retried every 3 minutes; otherwise a full cycle every `interval`.
+        for minute in range(1, max(1, cfg['interval'] // 60) + 1):
             if stop is not None and stop.wait(60):
                 return
             if stop is None:
                 time.sleep(60)
             with connect() as db:
                 pending = state(db)['request']
-                if pending and not pending.get('waiting'):
-                    break
+            if pending and (not pending.get('waiting') or minute % 3 == 0):
+                break
 
 
 def main():

@@ -92,10 +92,10 @@ function drawMonthly(){
 function drawPanels(){drawDaily();drawMonthly()}
 document.getElementById('dailyRange').addEventListener('change',()=>run(updateDaily));
 
-const MODE_TEXT={off:'Apagado',['dry-run']:'Simulación',on:'Activo'};
+const MODE_TEXT={off:'Apagado',['dry-run']:'Simulación',on:'Enviado',paused:'En pausa'};
 async function updateControl(){
   const r=await solarRequest('/api/control'),st=r.state||{},p=st.last_params,cfg=r.config,labels=r.charger_labels;
-  document.getElementById('controlMode').textContent=MODE_TEXT[r.mode]+(r.mode==='on'?(st.enabled?' · automatización activa':' · automatización en pausa'):'');
+  document.getElementById('controlMode').textContent=(r.mode==='on'?'Control habilitado':MODE_TEXT[r.mode])+(r.mode==='on'?(st.enabled?' · automatización activa':' · automatización en pausa'):'');
   const toggle=document.getElementById('controlToggle');toggle.hidden=r.mode!=='on';toggle.textContent=st.enabled?'Pausar automatización':'Activar automatización';toggle.dataset.enabled=String(!st.enabled);
   const parts=[];
   if(r.mode==='off')parts.push('Apagado: no se envía nada al inversor. Para probar, pon CONTROL_MODE=dry-run en el .env del VPS (solo simula y registra qué haría).');
@@ -104,13 +104,13 @@ async function updateControl(){
   if(st.paused_reason)parts.push('⚠ '+st.paused_reason);
   document.getElementById('controlSummary').textContent=parts.join(' ');
   const facts=[];
-  if(p&&p.cloud_online!==undefined&&p.cloud_online!==null)facts.push(['Conexión de comandos',p.cloud_online?'online':'⚠ offline (reinicia el datalogger WiFi)']);
+  if(p&&p.cloud_online!==undefined&&p.cloud_online!==null)facts.push(['Conexión de comandos (al leer)',p.cloud_online?'online':'⚠ offline (reinicia el inversor o el router)']);
   if(p){facts.push(['Inversor: vuelta a red',fmt(p.to_grid,0)+' %'],['Inversor: vuelta a batería',fmt(p.to_battery,0)+' %'],['Cargador',labels[p.charger]||String(p.charger)],['Umbrales por SOC',p.soc_mode?'sí':'no ('+p.battery_type+')'])}
   if(st.params_at)facts.push(['Leído',new Date(st.params_at).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})]);
   if(st.last_target)facts.push(['Objetivo',st.last_target.to_grid+'/'+st.last_target.to_battery+' · '+(labels[st.last_target.charger]||'')],['Motivo',st.last_target.reason]);
   if(st.request)facts.push(['Solicitud pendiente',st.request.label+(st.request.waiting?' · esperando que el equipo vuelva online':'')]);
   document.getElementById('controlFacts').replaceChildren(...facts.map(([k,v])=>el('div',{},el('span',{},k),el('b',{},v))));
-  document.querySelector('#controlTable tbody').replaceChildren(...r.actions.map(a=>el('tr',{},el('td',{},new Date(a.time).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),el('td',{},MODE_TEXT[a.mode]||a.mode),el('td',{},a.reason),el('td',{},(a.commands||[]).join(', ')||'—'),el('td',{},a.verified?'✓ verificado'+(a.error?' · '+a.error:''):a.error?'⚠ '+a.error:a.mode==='dry-run'?'simulado':'pendiente'))));
+  document.querySelector('#controlTable tbody').replaceChildren(...r.actions.map(a=>el('tr',{},el('td',{},new Date(a.time).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),el('td',{},MODE_TEXT[a.mode]||a.mode),el('td',{},a.reason),el('td',{},(a.commands||[]).join(', ')||'—'),el('td',{},a.verified?'✓ verificado'+(a.error?' · '+a.error:''):a.error?'⚠ '+a.error:a.mode==='dry-run'?'simulado':a.mode==='paused'?'no enviado (automatización en pausa)':'pendiente'))));
   for(const b of document.querySelectorAll('.control [data-preset],#ctlApply'))b.disabled=r.mode==='off';
 }
 async function controlRequest(body){
