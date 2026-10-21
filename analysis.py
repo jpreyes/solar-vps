@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
-from battery_strategy import (System, Strategy, LOAD_SHAPE, cost, pv_from_irradiance,
+from battery_strategy import (System, Strategy, LOAD_SHAPE, cost, pv_from_irradiance, pv_from_planes,
                               seasonal_load_factor, simulate)
 from storage import connect
 
@@ -279,8 +279,26 @@ def env_float(name, default):
 
 def system_from_env(capacity=None):
     return System(capacity_kwh=capacity or env_float('BATTERY_KWH', '15.36'),
-                  pv_kwp=env_float('PV_KWP', '9.92'), ac_limit_kw=env_float('PV_AC_LIMIT_KW', '8'),
+                  pv_kwp=sum(plane_kwps()), ac_limit_kw=env_float('PV_AC_LIMIT_KW', '8'),
                   performance_ratio=env_float('PV_PERFORMANCE_RATIO', '0.80'))
+
+
+def plane_kwps():
+    from weather import planes
+    return [p['kwp'] for p in planes()]
+
+
+def pv_kw_from_weather(payload, system, kwps=None):
+    """Modelled AC kW from a weather payload, per string plane when available."""
+    kwps = kwps or plane_kwps()
+    per_plane = [num(payload.get(f'gti_pv{i + 1}')) for i in range(len(kwps))]
+    temp = num(payload.get('temperature_2m'))
+    if all(v is not None for v in per_plane):
+        return pv_from_planes(list(zip(per_plane, kwps)), temp, system)
+    irradiance = num(payload.get('global_tilted_irradiance'))
+    if irradiance is None:
+        irradiance = num(payload.get('shortwave_radiation'))  # conservative fallback
+    return pv_from_irradiance(irradiance, temp, system)
 
 
 def load_model(series):
@@ -315,7 +333,29 @@ def candidate_strategies():
     fixed = [(floor, floor + 10), (floor, floor + 30), (30, 40), (40, 50)]
     out = [Strategy.fixed(a, b) for a, b in dict.fromkeys(fixed)]
     out += [Strategy.seasonal((floor, floor + 10), (40, 50)), Strategy.seasonal((floor, floor + 10), (30, 40))]
+    for months, label in (((5, 6, 7, 8), 'may–ago'), ((6, 7), 'jun–jul')):
+        strategy = Strategy.seasonal((floor, floor + 10), (40, 50), summer_months=tuple(m for m in range(1, 13) if m not in months))
+        strategy.name = f'{floor}/{floor + 10} · 40/50 {label}'
+        out.append(strategy)
     return out
+
+
+def full_charge_stats(days, trace, winter=(6, 7)):
+    """Share of winter days reaching ~100 % and the typical/worst yearly streak without it."""
+    daily = {}
+    for day, soc in zip(days, trace):
+        daily[day] = max(daily.get(day, 0), soc)
+    streak, worst, hits, total = 0, defaultdict(int), 0, 0
+    for day in sorted(daily):
+        full = daily[day] >= 98
+        streak = 0 if full else streak + 1
+        worst[day.year] = max(worst[day.year], streak)
+        if day.month in winter:
+            hits, total = hits + full, total + 1
+    streaks = sorted(worst.values())
+    return {'winter_full_days': round(hits / total, 3) if total else None,
+            'streak_typical_days': streaks[len(streaks) // 2] if streaks else None,
+            'streak_worst_days': streaks[-1] if streaks else None}
 
 
 def strategy_study(series=None, current=None, now=None):
@@ -325,7 +365,7 @@ def strategy_study(series=None, current=None, now=None):
         return _cache[key]
     with connect() as db:
         from weather import weather_id
-        climate = db.execute('''SELECT observed_at,gti,ghi,temperature FROM climate_hourly
+        climate = db.execute('''SELECT observed_at,gti,ghi,temperature,gti_planes FROM climate_hourly
           WHERE location=%s ORDER BY observed_at''', (weather_id(),)).fetchall()
         if series is None:
             series = samples(datetime(2000, 1, 1, tzinfo=timezone.utc), datetime.now(timezone.utc), db)
@@ -335,15 +375,19 @@ def strategy_study(series=None, current=None, now=None):
     measured_capacity = estimate_capacity_kwh(series)
     system = system_from_env()  # nameplate; the SOC-based estimate is reported, not simulated
     shape, monthly, measured_months = load_model(series)
-    zone = tz()
-    steps = []
+    zone, kwps = tz(), plane_kwps()
+    steps, days = [], []
     for row in climate:
         local = row['observed_at'].astimezone(zone)
-        irradiance = row['gti'] if row['gti'] is not None else row['ghi']
+        days.append((local - timedelta(hours=1)).date())
+        planes = row['gti_planes']
+        if planes and len(planes) == len(kwps) and all(v is not None for v in planes):
+            pv = pv_from_planes(list(zip(planes, kwps)), row['temperature'], system)
+        else:
+            pv = pv_from_irradiance(row['gti'] if row['gti'] is not None else row['ghi'], row['temperature'], system)
         # Archive values average the preceding hour; attribute them to that hour.
         hour = (local.hour - 1) % 24
-        steps.append((local.month, pv_from_irradiance(irradiance, row['temperature'], system),
-                      monthly[local.month] * shape[hour]))
+        steps.append((local.month, pv, monthly[local.month] * shape[hour]))
     years = len(steps) / 8766
     tariff, wear = env_float('GRID_TARIFF_CLP_KWH', '230'), env_float('BATTERY_WEAR_CLP_KWH', '45')
     strategies = candidate_strategies()
@@ -352,8 +396,10 @@ def strategy_study(series=None, current=None, now=None):
         strategies[0].name += ' (actual)'
     results = []
     for strategy in strategies:
-        total, months = simulate(steps, system, strategy)
+        trace = []
+        total, months = simulate(steps, system, strategy, trace=trace)
         results.append({'name': strategy.name, 'low': strategy.low, 'high': strategy.high,
+                        **full_charge_stats(days, trace),
                         'grid_kwh_year': round(total['grid'] / years), 'cycles_year': round(total['cycles'] / years),
                         'transfers_year': round(total['transfers'] / years),
                         'self_sufficiency': round(total['self_sufficiency'], 3),
@@ -365,6 +411,7 @@ def strategy_study(series=None, current=None, now=None):
         pv_month[month] += pv
     study = {'ready': True, 'years': round(years, 1), 'climate_from': climate[0]['observed_at'],
              'climate_to': climate[-1]['observed_at'],
+             'planes': __import__('weather').planes(),
              'system': {'capacity_kwh': system.capacity_kwh, 'capacity_measured_kwh': measured_capacity,
                         'pv_kwp': system.pv_kwp, 'ac_limit_kw': system.ac_limit_kw,
                         'performance_ratio': system.performance_ratio},
@@ -384,13 +431,12 @@ def forecast(db=None):
         return database.execute('''SELECT valid_at,payload FROM weather_forecast WHERE location=%s
           AND valid_at>now() ORDER BY valid_at''', (weather_id(),)).fetchall()
     rows = run(db) if db is not None else _with_db(run)
-    system, zone = system_from_env(), tz()
+    system, zone, kwps = system_from_env(), tz(), plane_kwps()
     days = defaultdict(lambda: {'pv_kwh': 0.0, 'hours': 0, 'cloud': [], 'wind': 0.0, 'rain': 0.0})
     for row in rows:
         p = row['payload']
-        irradiance = p.get('global_tilted_irradiance', p.get('shortwave_radiation'))
         day = days[(row['valid_at'] - timedelta(hours=1)).astimezone(zone).date().isoformat()]
-        day['pv_kwh'] += pv_from_irradiance(num(irradiance), num(p.get('temperature_2m')), system)
+        day['pv_kwh'] += pv_kw_from_weather(p, system, kwps)
         day['hours'] += 1
         if num(p.get('cloud_cover')) is not None:
             day['cloud'].append(num(p.get('cloud_cover')))

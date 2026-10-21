@@ -18,11 +18,58 @@ VARIABLES=('temperature_2m','relative_humidity_2m','precipitation','rain','showe
 CLIMATE_VARIABLES=('shortwave_radiation','global_tilted_irradiance','temperature_2m','cloud_cover')
 
 
-def panel_plane():
-    """Panel tilt and compass azimuth (0=north, 90=east) -> Open-Meteo params (0=south)."""
-    tilt=float(os.getenv('PV_TILT','35'))
-    compass=float(os.getenv('PV_AZIMUTH','0'))
-    return {'tilt':tilt,'azimuth':((compass-180)+180)%360-180}
+def _env(name,default):
+    value=os.getenv(name)
+    return float(value) if value not in (None,'') else float(default)
+
+
+def planes():
+    """One plane per MPPT string. Compass azimuth: 0=north, 90=east, 180=south, 270=west.
+
+    PV1_*/PV2_* override the shared PV_TILT/PV_AZIMUTH; each string defaults to
+    half of PV_KWP (16 x 620 W = 2 strings of 8 panels).
+    """
+    total=_env('PV_KWP','9.92')
+    out=[]
+    for name in ('PV1','PV2'):
+        kwp=_env(f'{name}_KWP',total/2)
+        if kwp<=0:continue
+        compass=_env(f'{name}_AZIMUTH',_env('PV_AZIMUTH','90'))
+        out.append({'name':name.lower(),'tilt':_env(f'{name}_TILT',_env('PV_TILT','30')),'compass':compass,
+                    'kwp':kwp,'azimuth':((compass-180)+180)%360-180})
+    return out
+
+
+def panel_plane(index=0):
+    """Open-Meteo tilt/azimuth parameters (azimuth 0=south, -90=east) of one plane."""
+    plane=planes()[index]
+    return {'tilt':plane['tilt'],'azimuth':plane['azimuth']}
+
+
+def extra_plane_series(url,params,session=None):
+    """GTI for planes 2..n: Open-Meteo returns a single tilted plane per request."""
+    out=[]
+    for index in range(1,len(planes())):
+        response=(session or requests).get(url,params={**params,'hourly':'global_tilted_irradiance',**panel_plane(index)},
+                                           timeout=(10,120))
+        response.raise_for_status()
+        out.append(response.json().get('hourly',{}).get('global_tilted_irradiance'))
+    return out
+
+
+def merge_planes(hourly,extra):
+    """Add gti_pv1/gti_pv2 series and make `global_tilted_irradiance` their kWp-weighted mean."""
+    plane_list=planes()
+    series=[hourly.get('global_tilted_irradiance')]+list(extra)
+    for plane,values in zip(plane_list,series):
+        if not isinstance(values,list) or len(values)!=len(hourly['time']):
+            raise ValueError('Serie de irradiancia por plano incompleta')
+        hourly['gti_'+plane['name']]=values
+    total=sum(p['kwp'] for p in plane_list)
+    hourly['global_tilted_irradiance']=[
+        None if any(s[i] is None for s in series) else sum(p['kwp']*s[i] for p,s in zip(plane_list,series))/total
+        for i in range(len(hourly['time']))]
+    return hourly
 
 
 def location():
@@ -66,6 +113,10 @@ def sync_weather(session=None):
     response.raise_for_status()
     body=response.json()
     if body.get('error'):raise ValueError('El proveedor meteorológico rechazó la consulta')
+    if isinstance(body.get('hourly'),dict) and isinstance(body['hourly'].get('time'),list):
+        merge_planes(body['hourly'],extra_plane_series(URL,params,session))
+        body.setdefault('hourly_units',{}).update({'gti_'+p['name']:'W/m²' for p in planes()})
+        body['pv_planes']=planes()
     rows=list(rows_from_response(body))
     with connect() as db:
         capture=db.execute('''INSERT INTO captures(device_sn,source,request,response)
@@ -98,11 +149,18 @@ def sync_climate(session=None,years=None,today=None):
 
     Open-Meteo's archive (ERA5-based) lags about a week; each run tops up what
     is missing. Gaps older than the forecast API's 92 days are recoverable here.
+    Changing the panel geometry downloads the plane irradiance again.
     """
     years=years or int(os.getenv('CLIMATE_YEARS','10'))
     today=today or datetime.now(timezone.utc).date()
     lat,lon=location()
+    signature=[{k:p[k] for k in ('name','tilt','compass','kwp')} for p in planes()]
     with connect() as db:
+        stored=db.execute('SELECT planes FROM climate_meta WHERE location=%s',(weather_id(),)).fetchone()
+        if not stored or stored['planes']!=signature:
+            db.execute('DELETE FROM climate_hourly WHERE location=%s',(weather_id(),))
+            db.execute('''INSERT INTO climate_meta(location,planes) VALUES (%s,%s)
+              ON CONFLICT(location) DO UPDATE SET planes=excluded.planes''',(weather_id(),Jsonb(signature)))
         last=db.execute('SELECT max(observed_at) AS t FROM climate_hourly WHERE location=%s',(weather_id(),)).fetchone()['t']
     start=last.date() if last else date(today.year-years,1,1)
     end=today-timedelta(days=7)
@@ -114,16 +172,20 @@ def sync_climate(session=None,years=None,today=None):
     hourly=response.json().get('hourly',{})
     times=hourly.get('time')
     if not isinstance(times,list):raise ValueError('Falta la serie climatológica horaria')
+    merge_planes(hourly,extra_plane_series(ARCHIVE_URL,params,session))
+    names=['gti_'+p['name'] for p in planes()]
     rows=[]
     for i,raw in enumerate(times):
         values=[(hourly.get(key) or [None]*len(times))[i] for key in CLIMATE_VARIABLES]
         if all(v is None for v in values):continue
-        rows.append((weather_id(),datetime.fromisoformat(raw).replace(tzinfo=timezone.utc),*values))
+        rows.append((weather_id(),datetime.fromisoformat(raw).replace(tzinfo=timezone.utc),*values,
+                     [hourly[n][i] for n in names]))
     with connect() as db:
         with db.cursor() as cursor:
-            cursor.executemany('''INSERT INTO climate_hourly(location,observed_at,ghi,gti,temperature,cloud_cover)
-              VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(location,observed_at) DO UPDATE
-              SET ghi=excluded.ghi,gti=excluded.gti,temperature=excluded.temperature,cloud_cover=excluded.cloud_cover''',rows)
+            cursor.executemany('''INSERT INTO climate_hourly(location,observed_at,ghi,gti,temperature,cloud_cover,gti_planes)
+              VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(location,observed_at) DO UPDATE
+              SET ghi=excluded.ghi,gti=excluded.gti,temperature=excluded.temperature,cloud_cover=excluded.cloud_cover,
+                  gti_planes=excluded.gti_planes''',rows)
     return len(rows)
 
 
@@ -134,7 +196,7 @@ def weather_status():
           ORDER BY observed_at DESC,id DESC LIMIT 1""",(weather_id(),)).fetchone()
         total=db.execute("SELECT count(DISTINCT observed_at) AS hours FROM measurements WHERE source='weather' AND device_sn=%s",(weather_id(),)).fetchone()['hours']
     return {'city':'Valdivia, Los Ríos','latitude':location()[0],'longitude':location()[1],
-            'latest':latest,'hours_archived':total,'source':'Open-Meteo',
+            'latest':latest,'hours_archived':total,'source':'Open-Meteo','planes':planes(),
             'source_url':'https://open-meteo.com/','kind':'Estimación de modelo horario; no estación local',
             'radiation_basis':'GHI: promedio de la hora anterior, W/m²'}
 

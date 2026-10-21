@@ -50,3 +50,18 @@ class PlaneAndForecastTests(unittest.TestCase):
         rows = list(forecast_rows(response, datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)))
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][2]['global_tilted_irradiance'], 200)
+
+
+class TwoPlaneTests(unittest.TestCase):
+    def test_strings_on_different_tilts_facing_east(self):
+        import os
+        from unittest.mock import patch
+        from weather import planes, merge_planes
+        env = {'PV1_TILT': '25', 'PV2_TILT': '40', 'PV1_AZIMUTH': '90', 'PV2_AZIMUTH': '90', 'PV_KWP': '9.92'}
+        with patch.dict(os.environ, env):
+            p = planes()
+            self.assertEqual([(x['tilt'], x['azimuth'], x['kwp']) for x in p], [(25, -90, 4.96), (40, -90, 4.96)])
+            hourly = merge_planes({'time': ['t0', 't1'], 'global_tilted_irradiance': [100, None]}, [[300, 50]])
+        self.assertEqual(hourly['gti_pv1'], [100, None])
+        self.assertEqual(hourly['gti_pv2'], [300, 50])
+        self.assertEqual(hourly['global_tilted_irradiance'], [200, None])

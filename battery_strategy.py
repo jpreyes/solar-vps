@@ -55,13 +55,21 @@ class Strategy:
         return cls(name, dict(lows), {m: min(100, v + gap) for m, v in lows.items()})
 
 
-def pv_from_irradiance(gti, temp_c, system):
-    """AC kW from plane-of-array irradiance (W/m²) and air temperature."""
+def _dc_kw(gti, temp_c, kwp, system):
     if gti is None or gti <= 0:
         return 0.0
     cell = (temp_c if temp_c is not None else 12.0) + gti / 800 * 25
-    dc = gti / 1000 * system.pv_kwp * system.performance_ratio * (1 + system.temp_coeff * (cell - 25))
-    return max(0.0, min(system.ac_limit_kw, dc))
+    return max(0.0, gti / 1000 * kwp * system.performance_ratio * (1 + system.temp_coeff * (cell - 25)))
+
+
+def pv_from_irradiance(gti, temp_c, system):
+    """AC kW from plane-of-array irradiance (W/m²) and air temperature."""
+    return min(system.ac_limit_kw, _dc_kw(gti, temp_c, system.pv_kwp, system))
+
+
+def pv_from_planes(planes, temp_c, system):
+    """AC kW for strings on different planes [(W/m², kWp), ...] sharing one AC ceiling."""
+    return min(system.ac_limit_kw, sum(_dc_kw(gti, temp_c, kwp, system) for gti, kwp in planes))
 
 
 def seasonal_load_factor(month, winter_extra=0.25):
@@ -73,8 +81,10 @@ def modelled_load(hour, month, daily_kwh, winter_extra=0.25):
     return daily_kwh * LOAD_SHAPE[hour] / _SHAPE_SUM * seasonal_load_factor(month, winter_extra)
 
 
-def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0):
-    """steps: iterable of (month, pv_kwh, load_kwh). Returns totals and per-month detail."""
+def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0, trace=None):
+    """steps: iterable of (month, pv_kwh, load_kwh). Returns totals and per-month detail.
+
+    `trace`, if a list, receives the SOC % after every step."""
     cap = system.capacity_kwh
     soc = cap * start_soc / 100
     on_grid = False
@@ -110,6 +120,8 @@ def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0):
         elif on_grid and soc >= high - 1e-9:
             on_grid, t['transfers'] = False, t['transfers'] + 1
         pct = soc / cap * 100
+        if trace is not None:
+            trace.append(pct)
         for key, value in (('pv', pv), ('load', load), ('grid', grid), ('curtailed', curtailed),
                            ('charged', charged), ('discharged', discharged)):
             t[key] += value

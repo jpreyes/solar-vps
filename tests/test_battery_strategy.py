@@ -44,3 +44,23 @@ class StrategyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PlaneTests(unittest.TestCase):
+    def test_two_planes_share_one_ac_ceiling(self):
+        from battery_strategy import pv_from_planes
+        system = System(ac_limit_kw=8)
+        self.assertEqual(pv_from_planes([(1100, 4.96), (1100, 4.96)], 5, system), 8)
+        one = pv_from_planes([(600, 4.96), (0, 4.96)], 15, system)
+        self.assertAlmostEqual(pv_from_planes([(600, 4.96), (600, 4.96)], 15, system), 2 * one)
+
+
+class FullChargeTests(unittest.TestCase):
+    def test_winter_full_days_and_streaks(self):
+        from datetime import date, timedelta
+        from analysis import full_charge_stats
+        days = [date(2025, 6, 1) + timedelta(days=i) for i in range(30)]
+        trace = [100 if i % 10 == 0 else 60 for i in range(30)]
+        stats = full_charge_stats(days, trace)
+        self.assertAlmostEqual(stats['winter_full_days'], 0.1)
+        self.assertEqual(stats['streak_worst_days'], 9)

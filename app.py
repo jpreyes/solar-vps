@@ -144,23 +144,21 @@ def daily():
     start=datetime.combine(start.astimezone(zone).date(),datetime.min.time(),zone)
     with connect() as db:
         rows=analysis.daily_energy(analysis.samples(start,end,db))
-        weather=db.execute('''SELECT DISTINCT ON(observed_at) observed_at,payload->>'shortwave_radiation' AS ghi,
-          payload->>'global_tilted_irradiance' AS gti FROM measurements WHERE source='weather' AND device_sn=%s
-          AND observed_at>%s AND observed_at<=%s ORDER BY observed_at,id DESC''',(weather_id(),start,end+timedelta(hours=1))).fetchall()
+        weather=db.execute('''SELECT DISTINCT ON(observed_at) observed_at,payload FROM measurements
+          WHERE source='weather' AND device_sn=%s AND observed_at>%s AND observed_at<=%s
+          ORDER BY observed_at,id DESC''',(weather_id(),start,end+timedelta(hours=1))).fetchall()
+    system,kwps=analysis.system_from_env(),analysis.plane_kwps()
     sun={}
     for w in weather:
         day=(w['observed_at']-timedelta(hours=1)).astimezone(zone).date().isoformat()
-        entry=sun.setdefault(day,{'ghi_kwh_m2':0.0,'gti_kwh_m2':0.0,'gti_hours':0})
-        entry['ghi_kwh_m2']+=(analysis.num(w['ghi']) or 0)/1000
-        if analysis.num(w['gti']) is not None:
-            entry['gti_kwh_m2']+=analysis.num(w['gti'])/1000
-            entry['gti_hours']+=1
-    system=analysis.system_from_env()
+        entry=sun.setdefault(day,{'ghi_kwh_m2':0.0,'pv_kwh':0.0,'hours':0})
+        entry['ghi_kwh_m2']+=(analysis.num(w['payload'].get('shortwave_radiation')) or 0)/1000
+        entry['pv_kwh']+=analysis.pv_kw_from_weather(w['payload'],system,kwps)
+        entry['hours']+=1
     for row in rows:
         s=sun.get(row['date'])
         row['ghi_kwh_m2']=round(s['ghi_kwh_m2'],2) if s else None
-        plane=s['gti_kwh_m2'] if s and s['gti_hours']>=20 else s['ghi_kwh_m2'] if s else None  # GHI: conservative fallback
-        row['pv_expected_kwh']=round(min(plane*system.pv_kwp*system.performance_ratio,system.ac_limit_kw*24),1) if plane is not None else None
+        row['pv_expected_kwh']=round(s['pv_kwh'],1) if s and s['hours']>=20 else None
     return jsonify(days=rows,basis='kWh integrados de lecturas de 5 min; red solo en modo L (importación real)')
 
 

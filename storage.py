@@ -101,6 +101,8 @@ def init():
         db.execute('''CREATE TABLE IF NOT EXISTS climate_hourly (
           location TEXT NOT NULL, observed_at TIMESTAMPTZ NOT NULL, ghi REAL, gti REAL,
           temperature REAL, cloud_cover REAL, PRIMARY KEY(location,observed_at))''')
+        db.execute('ALTER TABLE climate_hourly ADD COLUMN IF NOT EXISTS gti_planes REAL[]')
+        db.execute('CREATE TABLE IF NOT EXISTS climate_meta (location TEXT PRIMARY KEY, planes JSONB NOT NULL)')
         db.execute('''CREATE TABLE IF NOT EXISTS events (
           id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
           ok BOOLEAN NOT NULL, detail TEXT NOT NULL)''')
