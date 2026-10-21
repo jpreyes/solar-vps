@@ -14,7 +14,8 @@ async function updateAlerts(){
   const t=r.thresholds||{},facts=[];
   if(t.to_grid_soc!==null&&t.to_grid_soc!==undefined)facts.push(['Pasa a red al',fmt(t.to_grid_soc,0)+' %']);
   if(t.to_battery_soc!==null&&t.to_battery_soc!==undefined)facts.push(['Vuelve a batería al',fmt(t.to_battery_soc,0)+' %']);
-  if(r.capacity_kwh)facts.push(['Capacidad medida',fmt(r.capacity_kwh)+' kWh']);
+  if(r.capacity_nominal_kwh)facts.push(['Batería (placa)',fmt(r.capacity_nominal_kwh)+' kWh']);
+  if(r.capacity_kwh)facts.push(['Capacidad aparente por SOC',fmt(r.capacity_kwh)+' kWh']);
   if(r.days_since_full_charge!==null&&r.days_since_full_charge!==undefined)facts.push(['Última carga al 100 %','hace '+r.days_since_full_charge+' días']);
   document.getElementById('thresholds').replaceChildren(...facts.map(([k,v])=>el('div',{},el('span',{},k),el('b',{},v))));
 }

@@ -278,7 +278,7 @@ def env_float(name, default):
 
 
 def system_from_env(capacity=None):
-    return System(capacity_kwh=capacity or env_float('BATTERY_KWH', '11'),
+    return System(capacity_kwh=capacity or env_float('BATTERY_KWH', '15.36'),
                   pv_kwp=env_float('PV_KWP', '9.92'), ac_limit_kw=env_float('PV_AC_LIMIT_KW', '8'),
                   performance_ratio=env_float('PV_PERFORMANCE_RATIO', '0.80'))
 
@@ -333,7 +333,7 @@ def strategy_study(series=None, current=None, now=None):
         return {'ready': False, 'reason': 'Descargando la climatología horaria de Valdivia; vuelve a intentar en unos minutos.',
                 'climate_hours': len(climate)}
     measured_capacity = estimate_capacity_kwh(series)
-    system = system_from_env(None if os.getenv('BATTERY_KWH') else measured_capacity)
+    system = system_from_env()  # nameplate; the SOC-based estimate is reported, not simulated
     shape, monthly, measured_months = load_model(series)
     zone = tz()
     steps = []

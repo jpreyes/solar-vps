@@ -20,15 +20,15 @@ SUMMER_MONTHS = (10, 11, 12, 1, 2, 3)
 
 @dataclass
 class System:
-    capacity_kwh: float = 11.0          # measured ~11 kWh per 100 % SOC (Oct 2026 data)
+    capacity_kwh: float = 15.36         # NM51.2-300ES01 LiFePO4: 51.2 V x 300 Ah nameplate
     pv_kwp: float = 9.92                # 16 x 620 W
     ac_limit_kw: float = 8.0            # real sunny-day ceiling given by the owner
     performance_ratio: float = 0.80     # wiring, soiling, mismatch, MPPT, inverter
     temp_coeff: float = -0.0035         # Pmax %/°C typical for mono PERC/TOPCon
-    charge_eff: float = 0.90            # measured round trip ~0.77-0.80 incl. BMS SOC error
-    discharge_eff: float = 0.88
+    charge_eff: float = 0.95            # MPPT/charger + LiFePO4 coulombic losses
+    discharge_eff: float = 0.92         # LiFePO4 + inverter DC->AC conversion
     idle_kw: float = 0.05               # inverter self-consumption, measured ~50 W
-    max_charge_kw: float = 6.0
+    max_charge_kw: float = 7.5          # 150 A recommended x ~51 V
     max_discharge_kw: float = 8.0
     # Measured: in line mode (L) the house runs from the grid and PV only charges the battery.
     pv_feeds_load_on_grid: bool = False

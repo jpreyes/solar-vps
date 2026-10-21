@@ -172,6 +172,13 @@ def insights():
     result=analysis.insights(series,now)
     result['thresholds']=analysis.inferred_thresholds(series)
     result['capacity_kwh']=analysis.estimate_capacity_kwh(series)
+    nominal=analysis.env_float('BATTERY_KWH','15.36')
+    result['capacity_nominal_kwh']=nominal
+    if result['capacity_kwh'] and result['capacity_kwh']<0.85*nominal:
+        result['alerts'].append({'level':'info','code':'soc_scale','last':None,
+          'text':f"El SOC varía como si la batería tuviera {result['capacity_kwh']} kWh, pero la placa dice {nominal} kWh. "
+                 'Suele ser un BMS aún sin calibrar (batería nueva) o un sensor de corriente del inversor que mide bajo. '
+                 'Una carga completa al 100 % y algunas semanas de datos lo aclaran.'})
     return jsonify(result)
 
 
