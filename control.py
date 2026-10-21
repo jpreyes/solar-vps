@@ -386,6 +386,7 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         if not to_safety and commands_today(db) + len(commands) > cfg['max_commands_day']:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
+    print(f'Enviando {", ".join(commands)} · {target["reason"]} · verificando con el inversor (hasta 10 min)…', flush=True)
     try:
         code, message = client.send_settings(sn, commands)
     except (CloudError, ValueError) as exc:
@@ -420,6 +421,9 @@ def run(stop=None):
         print('Control apagado (CONTROL_MODE=off); el servicio queda inactivo.', flush=True)
     client = Cloud(os.environ['SOLAR_USERNAME'], os.environ['SOLAR_PASSWORD'])
     sn = os.environ['SOLAR_DEVICE_SN']
+    print(f"Control iniciado · modo {cfg['mode']} · base {cfg['base'][0]}/{cfg['base'][1]} · invierno "
+          f"{cfg['winter'][0]}/{cfg['winter'][1]} meses {sorted(cfg['winter_months'])} · ráfagas ≥ {cfg['storm_gust_kmh']:g} km/h · "
+          f"calibración {'sí' if cfg['calibration'] else 'no'} · carga red {cfg['grid_charge_a']} A", flush=True)
     while stop is None or not stop.is_set():
         if cfg['mode'] in ('dry-run', 'on'):
             try:
