@@ -109,7 +109,7 @@ async function updateControl(){
   if(st.last_target)facts.push(['Objetivo',st.last_target.to_grid+'/'+st.last_target.to_battery+' · '+(labels[st.last_target.charger]||'')],['Motivo',st.last_target.reason]);
   if(st.request)facts.push(['Solicitud pendiente',st.request.label]);
   document.getElementById('controlFacts').replaceChildren(...facts.map(([k,v])=>el('div',{},el('span',{},k),el('b',{},v))));
-  document.querySelector('#controlTable tbody').replaceChildren(...r.actions.map(a=>el('tr',{},el('td',{},new Date(a.time).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),el('td',{},MODE_TEXT[a.mode]||a.mode),el('td',{},a.reason),el('td',{},(a.commands||[]).join(', ')||'—'),el('td',{},a.error?'⚠ '+a.error:a.mode==='dry-run'?'simulado':a.verified?'✓ verificado':'pendiente'))));
+  document.querySelector('#controlTable tbody').replaceChildren(...r.actions.map(a=>el('tr',{},el('td',{},new Date(a.time).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),el('td',{},MODE_TEXT[a.mode]||a.mode),el('td',{},a.reason),el('td',{},(a.commands||[]).join(', ')||'—'),el('td',{},a.verified?'✓ verificado'+(a.error?' · '+a.error:''):a.error?'⚠ '+a.error:a.mode==='dry-run'?'simulado':'pendiente'))));
   for(const b of document.querySelectorAll('.control [data-preset],#ctlApply'))b.disabled=r.mode==='off';
 }
 async function controlRequest(body){

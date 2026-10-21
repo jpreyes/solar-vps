@@ -242,21 +242,25 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
     try:
-        code = client.send_settings(sn, commands)
+        code, message = client.send_settings(sn, commands)
     except (CloudError, ValueError) as exc:
         with connect() as db:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error=str(exc))
         event(False, 'Control: envío fallido ' + str(exc))
         return 'Envío fallido.'
-    verified, after = (False, None) if code != '0' else verify(client, sn, target, sleep=sleep)
+    # The cloud may answer with a timeout-like code while the device still applies the change:
+    # the read-back is what counts, whatever the code.
+    verified, after = verify(client, sn, target, sleep=sleep)
+    detail = f'código {code}' + (f': {message}' if message else '')
     with connect() as db:
         log_action(db, 'on', target['reason'], commands, snapshot(current), code, verified,
-                   snapshot(after) if after else None, None if verified else f'Código {code}; sin confirmar')
+                   snapshot(after) if after else None,
+                   None if verified and code == '0' else (f'Confirmado leyendo el equipo ({detail})' if verified else f'Sin confirmar ({detail})'))
         if verified:
             db.execute('UPDATE control_state SET last_target=%s, paused_reason=NULL WHERE id=1', (Jsonb(target),))
         else:
             db.execute('UPDATE control_state SET enabled=false, last_target=NULL, paused_reason=%s WHERE id=1',
-                       (f'El equipo no confirmó {", ".join(commands)} (código {code}); automatización en pausa.',))
+                       (f'El equipo no confirmó {", ".join(commands)} ({detail}); automatización en pausa.',))
     event(verified, f'Control: {", ".join(commands)} · {target["reason"]}' + ('' if verified else ' · sin confirmar'))
     return ('Aplicado y verificado: ' if verified else 'Sin confirmar: ') + ', '.join(commands)
 

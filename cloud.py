@@ -126,7 +126,11 @@ class Cloud:
         return result['data']
 
     def send_settings(self, sn, commands):
-        """Send up to three whitelisted battery commands. Returns the vendor result code."""
+        """Send up to three whitelisted battery commands. Returns (code, vendor message).
+
+        The message explains non-zero codes (e.g. device offline or no reply); settings
+        responses carry no credentials, unlike login, so it is kept (truncated) for the log.
+        """
         if not commands or len(commands) > 3 or not all(isinstance(c, str) and SETTING_COMMAND.fullmatch(c) for c in commands):
             raise ValueError('Comando de configuración no permitido')
         payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{i + 1}': c for i, c in enumerate(commands)},
@@ -138,7 +142,8 @@ class Cloud:
             if str(result['code']) in ('450', '401', '403'):
                 self.login()
                 result = self._post(PARAM_SET, payload)
-        return str(result['code'])
+        message = result.get('message') or result.get('msg') or ''
+        return str(result['code']), str(message)[:200]
 
     def history(self, sn, start, end):
         page = 1

@@ -78,7 +78,7 @@ class CloudWriteTests(unittest.TestCase):
         session.post.return_value = Mock(status_code=200, json=Mock(return_value={'code': 0}))
         client = Cloud('u', 'p', session)
         client.token = 'T'
-        self.assertEqual(client.send_settings('SN', ['PBCC020', 'PBDC030']), '0')
+        self.assertEqual(client.send_settings('SN', ['PBCC020', 'PBDC030']), ('0', ''))
         call = session.post.call_args
         self.assertTrue(call.args[0].endswith(PARAM_SET))
         self.assertEqual(json.loads(call.kwargs['data']['commands']), {'S01': 'PBCC020', 'S02': 'PBDC030'})
