@@ -7,7 +7,11 @@ function energyState(data,observedAt,now=Date.now()){
   const known=[charge,discharge,chargeA,dischargeA].some(value=>value!==null);
   const battery=!known?'unknown':charging&&discharging?'uncertain':charging?'charging':discharging?'discharging':'idle';
   const timestamp=observedAt?+new Date(observedAt):NaN,age=now-timestamp;
-  return {solar,charge,discharge,chargeA,dischargeA,battery,grid:energyNumber(data.gridPowerInputActiveTotal),
+  // gridPowerInputActiveTotal mirrors the AC output in battery mode (B); only line mode (L) imports.
+  const mode=data.workMode==='L'||data.workMode==='B'?data.workMode:energyNumber(data.statusGrid)===1?'L':energyNumber(data.statusGrid)===0?'B':null;
+  const gridField=energyNumber(data.gridPowerInputActiveTotal);
+  const grid=mode==='L'?gridField:mode==='B'?0:null;
+  return {solar,charge,discharge,chargeA,dischargeA,battery,mode,grid,
     load:energyNumber(data.acOutputActivePowerTotal),soc:energyNumber(data.batteryCapacity),
     fresh:Number.isFinite(timestamp)&&age>=-300000&&age<=600000};
 }
@@ -20,13 +24,14 @@ function updateEnergy(data,observedAt){
   const level=document.getElementById('batteryLevel');if(level&&state.soc!==null){const height=53*Math.max(0,Math.min(100,state.soc))/100;level.setAttribute('height',String(height));level.setAttribute('y',String(75-height))}
   const flows={solar:state.solar>0,load:state.load>0,grid:state.grid>0,battery:state.battery==='charging'||state.battery==='discharging'};
   for(const [name,active] of Object.entries(flows)){const path=document.getElementById('flow-'+name);if(path){path.classList.toggle('energized',Boolean(active&&state.fresh));path.classList.toggle('reversed',name==='battery'&&state.battery==='discharging')}}
-  put('flowFreshness',state.fresh?'● Estado reciente':'○ Lectura guardada · animación en pausa');
+  put('flowFreshness',(state.fresh?'● Estado reciente':'○ Lectura guardada · animación en pausa')+(state.mode?' · '+(state.mode==='L'?'Modo red':'Modo batería'):''));
   const sentences=[];
   if(state.solar!==null)sentences.push('Solar: '+format(state.solar)+' W');
   if(state.load!==null)sentences.push('Consumo: '+format(state.load)+' W');
   if(state.battery==='charging')sentences.push('La batería está recibiendo carga');
   if(state.battery==='discharging')sentences.push('La batería está entregando energía');
-  if(state.grid>0)sentences.push('La red está aportando energía');
+  if(state.mode==='L')sentences.push('Modo red: la casa se alimenta de la red'+(state.solar>0?' y el sol solo carga la batería':''));
+  if(state.mode==='B')sentences.push('Modo batería: la red no aporta');
   if(state.grid<0)sentences.push('La red reporta potencia negativa; sentido sin confirmar');
   if(state.battery==='uncertain')sentences.push('El sentido de la batería requiere confirmar la lectura');
   put('energySummary',(state.fresh?'':'Última lectura disponible. ')+(sentences.length?sentences.join(' · '):'Conecta tu equipo para ver los flujos.'));
@@ -46,6 +51,7 @@ async function updateWeather(){
     document.getElementById('weatherTemp').textContent=format(data.temperature_2m)+'°';
     document.getElementById('weatherDescription').textContent=weatherDescription(data.weather_code);
     document.getElementById('weatherRadiation').textContent=format(data.shortwave_radiation);
+    const gti=document.getElementById('weatherGti');if(gti)gti.textContent=format(data.global_tilted_irradiance)+' W/m²';
     document.getElementById('weatherCloud').textContent=format(data.cloud_cover)+' %';
     document.getElementById('weatherRain').textContent=format(data.precipitation)+' mm';
     document.getElementById('weatherShowers').textContent=format(data.showers)+' mm';

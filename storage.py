@@ -50,7 +50,8 @@ def connect():
                           port=int(os.getenv('DB_PORT', '5432')),
                           dbname=os.getenv('DB_NAME', 'solar'), user=os.getenv('DB_USER', 'solar'),
                           password=os.environ['POSTGRES_PASSWORD'], row_factory=dict_row,
-                          connect_timeout=10, **({'prepare_threshold':None} if serial else {}))
+                          connect_timeout=10, options='-c TimeZone=UTC',
+                          **({'prepare_threshold':None} if serial else {}))
         return _LocalConnection(connection) if serial else connection
     except BaseException:
         if serial:
@@ -72,11 +73,19 @@ def init():
           source TEXT NOT NULL, device_time_raw TEXT, observed_at TIMESTAMPTZ,
           fingerprint TEXT NOT NULL, payload JSONB NOT NULL,
           UNIQUE(device_sn, source, fingerprint))''')
+        # Identical vendor pages are re-read every cycle: keep one row per distinct
+        # response and count repeats, instead of a full JSON copy every 5 minutes.
+        db.execute('ALTER TABLE captures ADD COLUMN IF NOT EXISTS response_hash TEXT')
+        db.execute('ALTER TABLE captures ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ')
+        db.execute('ALTER TABLE captures ADD COLUMN IF NOT EXISTS seen_count INTEGER NOT NULL DEFAULT 1')
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS captures_distinct ON captures(device_sn,source,response_hash)')
         db.execute('CREATE INDEX IF NOT EXISTS measurements_time ON measurements(received_at)')
+        db.execute('CREATE INDEX IF NOT EXISTS measurements_source_time ON measurements(source,device_sn,observed_at)')
         db.execute('CREATE INDEX IF NOT EXISTS measurements_observed ON measurements((COALESCE(observed_at,received_at)))')
         db.execute('''CREATE TABLE IF NOT EXISTS history_sync (
           device_sn TEXT PRIMARY KEY, start_date DATE NOT NULL, scanned_through DATE NOT NULL,
           checked_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+        db.execute('ALTER TABLE history_sync ADD COLUMN IF NOT EXISTS reconciled_on DATE')
         db.execute('''CREATE TABLE IF NOT EXISTS collection_settings (
           id INTEGER PRIMARY KEY CHECK(id=1), interval_seconds INTEGER NOT NULL,
           last_started TIMESTAMPTZ, last_finished TIMESTAMPTZ, last_duration DOUBLE PRECISION,
@@ -86,6 +95,12 @@ def init():
         if interval not in (60,300,600,900):
             raise ValueError('HISTORY_SYNC_SECONDS debe ser 60, 300, 600 o 900')
         db.execute('INSERT INTO collection_settings(id,interval_seconds) VALUES (1,%s) ON CONFLICT DO NOTHING',(interval,))
+        db.execute('''CREATE TABLE IF NOT EXISTS weather_forecast (
+          location TEXT NOT NULL, valid_at TIMESTAMPTZ NOT NULL, fetched_at TIMESTAMPTZ NOT NULL,
+          payload JSONB NOT NULL, PRIMARY KEY(location,valid_at))''')
+        db.execute('''CREATE TABLE IF NOT EXISTS climate_hourly (
+          location TEXT NOT NULL, observed_at TIMESTAMPTZ NOT NULL, ghi REAL, gti REAL,
+          temperature REAL, cloud_cover REAL, PRIMARY KEY(location,observed_at))''')
         db.execute('''CREATE TABLE IF NOT EXISTS events (
           id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
           ok BOOLEAN NOT NULL, detail TEXT NOT NULL)''')
@@ -105,20 +120,30 @@ def device_time(data):
         return raw, None
 
 
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def store_capture(db, sn, source, request, response):
+    """Insert a capture or, if this exact response was already archived, count the repeat."""
+    return db.execute('''INSERT INTO captures(device_sn, source, request, response, response_hash, last_seen_at)
+      VALUES (%s,%s,%s,%s,%s,now())
+      ON CONFLICT(device_sn,source,response_hash) DO UPDATE
+      SET last_seen_at=now(), seen_count=captures.seen_count+1 RETURNING id''',
+      (sn, source, Jsonb(request), Jsonb(response), digest(response))).fetchone()['id']
+
+
 def save(sn, source, response, request, db=None):
     rows = [response['data']] if source == 'realtime' else response['data']['list']
     with (nullcontext(db) if db is not None else connect()) as db:
-        capture = db.execute('''INSERT INTO captures(device_sn, source, request, response)
-          VALUES (%s,%s,%s,%s) RETURNING id''',
-          (sn, source, Jsonb(request), Jsonb(response))).fetchone()['id']
+        capture = store_capture(db, sn, source, request, response)
         for row in rows:
             if not isinstance(row, dict):
                 continue
             raw, observed = device_time(row)
-            digest = hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             db.execute('''INSERT INTO measurements(capture_id,device_sn,source,device_time_raw,observed_at,fingerprint,payload)
               VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
-              (capture, sn, source, raw, observed, digest, Jsonb(row)))
+              (capture, sn, source, raw, observed, digest(row), Jsonb(row)))
 
 
 def history_checkpoint(sn):
@@ -126,12 +151,13 @@ def history_checkpoint(sn):
         return db.execute('SELECT * FROM history_sync WHERE device_sn=%s', (sn,)).fetchone()
 
 
-def mark_history(sn, start, through):
+def mark_history(sn, start, through, reconciled_on=None):
     with connect() as db:
-        db.execute('''INSERT INTO history_sync(device_sn,start_date,scanned_through)
-          VALUES (%s,%s,%s) ON CONFLICT(device_sn) DO UPDATE
-          SET start_date=excluded.start_date,scanned_through=excluded.scanned_through,checked_at=now()''',
-          (sn, start, through))
+        db.execute('''INSERT INTO history_sync(device_sn,start_date,scanned_through,reconciled_on)
+          VALUES (%s,%s,%s,%s) ON CONFLICT(device_sn) DO UPDATE
+          SET start_date=excluded.start_date,scanned_through=excluded.scanned_through,checked_at=now(),
+              reconciled_on=COALESCE(excluded.reconciled_on,history_sync.reconciled_on)''',
+          (sn, start, through, reconciled_on))
 
 
 def event(ok, detail):

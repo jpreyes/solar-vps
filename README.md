@@ -2,11 +2,26 @@
 
 Primera versión para un inversor, alojada en tu propio Ubuntu. Recolector independiente de la web, PostgreSQL persistente, panel con gráficos y exportaciones Excel/CSV/JSONL. Sin comandos de control al inversor.
 
+## Novedades (análisis y gestión de batería)
+
+- **Interpretación correcta del inversor.** `gridPowerInputActiveTotal` copia el consumo en modo batería (B); solo en modo red (L) es importación. El panel, los kWh diarios y el diagrama usan `gridImport` derivado. En modo L la casa se alimenta de la red y el sol solo carga la batería (medido).
+- **Balance diario** (`/api/daily`): kWh de solar, consumo, red, entrada/salida de batería, SOC mín/máx, horas en modo red y solar esperado según la irradiancia sobre el plano de los paneles.
+- **Alertas** (`/api/insights`): string FV sin tensión, BMS desconectado (SOC 0 % / <40 V), sin carga completa en 10 días, temperatura, fallas, cortes de datos y datos atrasados. También infiere los umbrales actuales (SOC al pasar a red y al volver a batería) y estima la capacidad real de la batería.
+- **Estrategia de batería** (`/api/strategy`, `battery_strategy.py`): simulación hora a hora con 10+ años de radiación de Valdivia (Open-Meteo archive, tabla `climate_hourly`) y tu consumo medido; compara umbrales (actual, 20/30, 40/50, estacionales) en kWh de red, ciclos, cambios red↔batería y costo. Se recalcula sola cada hora.
+- **Pronóstico** (`weather_forecast`): solar esperada para los próximos 3 días con aviso de temporal (viento/lluvia) para subir la reserva temporalmente.
+- **Gráfico histórico** (`/api/field`): agregación en el servidor (promedio y banda mín–máx), así “Todo el historial” ya no se corta en las primeras 5000 lecturas. Segunda serie en eje derecho para comparar (p. ej., solar vs irradiancia).
+- **Almacenamiento**: las páginas idénticas del proveedor se guardan una vez (`captures.response_hash`, `seen_count`, `last_seen_at`) en vez de una copia completa cada 5 min. La sincronización normal pide solo el día actual y reconcilia los 2 días anteriores una vez al día (menos solicitudes al proveedor).
+- **Operación**: gunicorn con hilos y `timeout=600` (las exportaciones largas ya no se cortan a los 30 s), rotación de logs Docker, servicio `backup` con `pg_dump` diario y retención `BACKUP_KEEP_DAYS`, sesiones PostgreSQL en UTC (exportaciones sin desfase horario), `TRUST_PROXY=1` para usar detrás de un proxy HTTPS.
+
+Variables nuevas en `.env.example`: plano de paneles (`PV_TILT`, `PV_AZIMUTH` en grados de brújula: 0 = norte, 90 = este), potencia (`PV_KWP`, `PV_AC_LIMIT_KW`, `PV_PERFORMANCE_RATIO`), batería y economía (`BATTERY_KWH`, `BATTERY_MIN_SOC`, `GRID_TARIFF_CLP_KWH`, `BATTERY_WEAR_CLP_KWH`, `LOAD_WINTER_EXTRA`). Ajusta la tarifa a tu boleta. El análisis detallado con datos reales está en `ANALISIS-BATERIA.md`.
+
+Actualizar en el VPS: `docker compose up -d --build` (las migraciones de tablas son automáticas e idempotentes; los respaldos quedan en `./backups`).
+
 ## Esquema de energía y meteorología de Valdivia
 
 El panel incluye ilustraciones SVG de paneles, inversor, batería, red y casa. Las partículas animadas indican las entradas y salidas reportadas. La batería cambia de dirección entre carga y descarga y su indicador refleja el SOC. Se pausa la animación si la lectura tiene más de diez minutos, falta la hora interpretable o hay carga y descarga simultáneas. La potencia negativa de red no se interpreta automáticamente como exportación, porque ese convenio no se ha confirmado para el equipo. Se respeta la preferencia del sistema de reducir movimiento.
 
-El servicio Docker `weather` descarga Open-Meteo cada 15 minutos, sin usar la cuenta del inversor y aunque la web esté cerrada. Para iniciarlo en Ubuntu: `docker compose up -d --build weather`. La prueba local lo inicia en un hilo independiente al abrir `local_preview.py`.
+El servicio Docker `weather` descarga Open-Meteo cada 30 minutos (`WEATHER_SYNC_SECONDS`), sin usar la cuenta del inversor y aunque la web esté cerrada. Para iniciarlo en Ubuntu: `docker compose up -d --build weather`. La prueba local lo inicia en un hilo independiente al abrir `local_preview.py`.
 
 La referencia geográfica es el centro de Valdivia, Los Ríos (-39.81422, -73.24589). Se pueden ajustar `WEATHER_LATITUDE` y `WEATHER_LONGITUDE` en `.env`. La fuente es un **modelo meteorológico horario**, no una estación junto a los paneles ni radiación medida por el inversor. La radiación global horizontal GHI, directa y difusa está en W/m² y promedia la hora anterior. No equivale a la irradiancia sobre paneles inclinados. Se conserva temperatura, humedad, precipitación total, lluvia, chubascos, código de tiempo, nubosidad, viento, presión, GHI, radiación directa/difusa y DNI, con unidades y metadatos.
 
@@ -86,7 +101,7 @@ El gráfico incluye el historial descargado y usa la fecha de medición, con la 
 
 ## Funcionamiento automático
 
-El proceso `collector` descarga primero el historial desde el 18 de octubre de 2026. Consulta en lotes de hasta 31 días y recorre todas las páginas. Guarda un checkpoint solo cuando termina el lote. Repite la sincronización según el intervalo elegido, volviendo a consultar dos días anteriores para recoger datos tardíos. Tras una desconexión continúa desde el avance guardado, con ese solapamiento. Los fallos tienen espera creciente, hasta cuatro horas. Las páginas se espacian un segundo. Ante HTTP 429 se espera al menos cinco minutos y se respeta `Retry-After` si es mayor. La semántica del final de rango se cubre con un día adicional de solapamiento y debe contrastarse con el portal real.
+El proceso `collector` descarga primero el historial desde el 18 de octubre de 2026. Consulta en lotes de hasta 31 días y recorre todas las páginas. Guarda un checkpoint solo cuando termina el lote. Repite la sincronización según el intervalo elegido consultando solo el día actual; una vez al día vuelve a consultar los dos días anteriores para recoger datos tardíos. Tras una desconexión continúa desde el avance guardado, con ese solapamiento. Los fallos tienen espera creciente, hasta cuatro horas. Las páginas se espacian un segundo. Ante HTTP 429 se espera al menos cinco minutos y se respeta `Retry-After` si es mayor. La semántica del final de rango se cubre con un día adicional de solapamiento y debe contrastarse con el portal real.
 
 La prueba local se prepara a un minuto para evaluar rápidamente. El panel muestra duración, páginas y registros nuevos del último ciclo. Nunca se solapan ciclos: si una descarga tarda más que el intervalo, se termina primero y se espera al menos cinco segundos. Cambiar de 1 a 5 o 10 minutos desde el panel no requiere volver a introducir credenciales. Estos intervalos se probaron con reloj simulado y con persistencia real de la configuración; no equivalen a una validación de la cuota de la API. En 100 muestras históricas recibidas, la separación mediana observada fue de 300 segundos; el ritmo puede variar.
 

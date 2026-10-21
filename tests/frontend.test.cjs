@@ -40,3 +40,10 @@ test('Old readings and conflicting battery directions do not imply a live flow',
  assert.equal(energyContext.state({chargingCurrent:21,dischargingCurrent:4},time,now).battery,'uncertain');
  assert.equal(energyContext.state({pvInputPower1:0,pvInputPower2:1360},time,now).solar,1360);
 });
+test('Grid field counts as import only in line mode',()=>{
+ const time='2026-10-20T12:00:00Z',now=+new Date(time);
+ assert.equal(energyContext.state({workMode:'B',gridPowerInputActiveTotal:1333,acOutputActivePowerTotal:1376},time,now).grid,0);
+ assert.equal(energyContext.state({workMode:'L',gridPowerInputActiveTotal:3510},time,now).grid,3510);
+ assert.equal(energyContext.state({statusGrid:1,gridPowerInputActiveTotal:200},time,now).mode,'L');
+ assert.equal(energyContext.state({gridPowerInputActiveTotal:200},time,now).grid,null);
+});

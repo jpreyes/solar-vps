@@ -32,3 +32,21 @@ class WeatherTests(unittest.TestCase):
 
     def test_missing_hourly_series_rejected(self):
         with self.assertRaises(ValueError):list(rows_from_response({}))
+
+
+class PlaneAndForecastTests(unittest.TestCase):
+    def test_compass_azimuth_converts_to_open_meteo_convention(self):
+        import os
+        from unittest.mock import patch
+        from weather import panel_plane
+        with patch.dict(os.environ, {'PV_TILT': '30', 'PV_AZIMUTH': '0'}):
+            self.assertEqual(panel_plane(), {'tilt': 30.0, 'azimuth': -180.0})
+        with patch.dict(os.environ, {'PV_AZIMUTH': '90'}):
+            self.assertEqual(panel_plane()['azimuth'], -90.0)  # east
+
+    def test_forecast_rows_only_future(self):
+        from weather import forecast_rows
+        response = {'hourly': {'time': ['2026-10-20T12:00', '2026-10-20T13:00'], 'global_tilted_irradiance': [100, 200]}}
+        rows = list(forecast_rows(response, datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2]['global_tilted_irradiance'], 200)

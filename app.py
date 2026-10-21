@@ -14,8 +14,13 @@ import psycopg
 from werkzeug.exceptions import HTTPException
 from scheduler import settings, set_interval
 from weather import weather_status,weather_id
+import analysis
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__, static_folder='static')
+if os.getenv('TRUST_PROXY') == '1':
+    # Behind an HTTPS reverse proxy the Origin check needs the public scheme/host.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 _local_refresh_lock = threading.Lock()
 
 
@@ -104,13 +109,79 @@ def index():
 def status():
     with connect() as db:
         latest = db.execute("SELECT received_at,response FROM captures WHERE source='realtime' ORDER BY id DESC LIMIT 1").fetchone()
+        # The 5-minute history is often fresher than the last on-demand reading.
+        newest = db.execute('''SELECT received_at,observed_at,payload FROM measurements
+          WHERE source IN ('history','realtime') AND observed_at IS NOT NULL
+          ORDER BY observed_at DESC,id DESC LIMIT 1''').fetchone()
         last_event = db.execute('SELECT time,ok,detail FROM events ORDER BY id DESC LIMIT 1').fetchone()
         stats = db.execute('SELECT count(*) AS captures,min(received_at) AS since FROM captures').fetchone()
         history = db.execute('SELECT * FROM history_sync ORDER BY checked_at DESC LIMIT 1').fetchone()
         coverage = db.execute("SELECT count(*) AS measurements,min(observed_at) AS first_time,max(observed_at) AS last_time FROM measurements WHERE source='history'").fetchone()
     if latest:
         latest['observed_at']=device_time(latest['response'].get('data',{}))[1]
-    return jsonify(latest=latest, event=last_event, stats=stats, history=history, coverage=coverage,collection=settings())
+    if newest and (not latest or not latest['observed_at'] or newest['observed_at']>latest['observed_at']):
+        latest={'received_at':newest['received_at'],'observed_at':newest['observed_at'],'response':{'data':newest['payload']}}
+    derived=analysis.derive(latest['response'].get('data') or {}) if latest else None
+    return jsonify(latest=latest, derived=derived, event=last_event, stats=stats, history=history, coverage=coverage,collection=settings())
+
+
+@app.get('/api/field')
+@protected
+def field_series():
+    start,end=period()
+    field=request.args.get('field','pvTotal')
+    if not field.replace('_','').isalnum() or len(field)>64:
+        raise ValueError('Variable no válida')
+    return jsonify(analysis.field_series(field,start,end))
+
+
+@app.get('/api/daily')
+@protected
+def daily():
+    start,end=period()
+    zone=analysis.tz()
+    # Whole local days so partial first/last days are not under-counted silently.
+    start=datetime.combine(start.astimezone(zone).date(),datetime.min.time(),zone)
+    with connect() as db:
+        rows=analysis.daily_energy(analysis.samples(start,end,db))
+        weather=db.execute('''SELECT DISTINCT ON(observed_at) observed_at,payload->>'shortwave_radiation' AS ghi,
+          payload->>'global_tilted_irradiance' AS gti FROM measurements WHERE source='weather' AND device_sn=%s
+          AND observed_at>%s AND observed_at<=%s ORDER BY observed_at,id DESC''',(weather_id(),start,end+timedelta(hours=1))).fetchall()
+    sun={}
+    for w in weather:
+        day=(w['observed_at']-timedelta(hours=1)).astimezone(zone).date().isoformat()
+        entry=sun.setdefault(day,{'ghi_kwh_m2':0.0,'gti_kwh_m2':0.0,'gti_hours':0})
+        entry['ghi_kwh_m2']+=(analysis.num(w['ghi']) or 0)/1000
+        if analysis.num(w['gti']) is not None:
+            entry['gti_kwh_m2']+=analysis.num(w['gti'])/1000
+            entry['gti_hours']+=1
+    system=analysis.system_from_env()
+    for row in rows:
+        s=sun.get(row['date'])
+        row['ghi_kwh_m2']=round(s['ghi_kwh_m2'],2) if s else None
+        plane=s['gti_kwh_m2'] if s and s['gti_hours']>=20 else s['ghi_kwh_m2'] if s else None  # GHI: conservative fallback
+        row['pv_expected_kwh']=round(min(plane*system.pv_kwp*system.performance_ratio,system.ac_limit_kw*24),1) if plane is not None else None
+    return jsonify(days=rows,basis='kWh integrados de lecturas de 5 min; red solo en modo L (importación real)')
+
+
+@app.get('/api/insights')
+@protected
+def insights():
+    now=datetime.now(timezone.utc)
+    series=analysis.samples(now-timedelta(days=30),now)
+    result=analysis.insights(series,now)
+    result['thresholds']=analysis.inferred_thresholds(series)
+    result['capacity_kwh']=analysis.estimate_capacity_kwh(series)
+    return jsonify(result)
+
+
+@app.get('/api/strategy')
+@protected
+def strategy():
+    now=datetime.now(timezone.utc)
+    series=analysis.samples(now-timedelta(days=400),now)
+    study=analysis.strategy_study(series,analysis.inferred_thresholds(series))
+    return jsonify(study=study,forecast=analysis.forecast())
 
 
 @app.post('/api/collection/interval')

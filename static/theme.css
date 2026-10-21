@@ -18,3 +18,15 @@ main{max-width:1680px;padding-top:32px}.intro{margin-bottom:24px}h1{font-size:cl
 
 .weather-card[data-sky=clear] .weather-illustration>path{opacity:0}.weather-card[data-sky=cloudy] .weather-illustration>path:last-child{opacity:0}.weather-card[data-sky=rain] .weather-sun{opacity:.25;animation:none}
 
+
+/* Alerts, legends, daily balance and battery strategy */
+.alerts{display:grid;gap:8px;margin-bottom:20px}.alert{padding:12px 16px;border-radius:10px;font-size:13px;line-height:1.5;background:#eef5f7;border:1px solid #d6e5ea}.alert.warning{background:#fff4e0;border-color:#efd9a8}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 0;font-size:11px;color:#59727d}.legend .key::before{content:'';display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--key,#999)}.legend .pv{--key:#e0a93b}.legend .load{--key:#237c7b}.legend .grid{--key:#5b8fd6}.legend .expected{--key:#8a6a1e}
+.card.warn{border-color:#efd9a8;background:#fffaf0}.card.grid .value{color:#3f6fb4}
+.daily,.strategy{margin-bottom:22px}.totals,.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:14px 0}.totals div,.facts div{background:#f4f8f9;border-radius:10px;padding:10px 12px}.totals span,.facts span{display:block;font-size:10px;color:#71899a;margin-bottom:4px}.totals b,.facts b{font-size:15px;font-weight:600}
+.strategy-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px}.strategy h3{font-size:13px;margin:0 0 10px;color:#4a6470}#strategySummary{line-height:1.7;margin-top:0}
+.forecast{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.forecast .day{border:1px solid #e0e9ed;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:3px}.forecast .day span{font-size:11px;color:#71899a;text-transform:capitalize}.forecast .day b{font-size:20px}.forecast .day small{font-size:10px;color:#8196a2}.forecast .day p{font-size:11px;margin:4px 0 0;line-height:1.45}.forecast .good{background:#f0f8f3}.forecast .low{background:#f4f6f8}.forecast .warn{background:#fff4e0;border-color:#efd9a8}
+.tablewrap{overflow-x:auto;margin:16px 0}table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:8px 10px;text-align:right;border-bottom:1px solid #e6eef1;white-space:nowrap}th:first-child,td:first-child{text-align:left}th{font-size:10px;color:#71899a;font-weight:600}tr.best td{background:#eef7f2;font-weight:600}tr.current td{background:#f5f6f7}
+#dailyChart,#monthlyGrid{width:100%;height:260px;margin-top:6px}#monthlyGrid{height:200px}
+@media(max-width:850px){.strategy-grid{grid-template-columns:1fr}}
+.subhead{font-size:13px;margin:18px 0 0;color:#4a6470}

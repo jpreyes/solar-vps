@@ -13,7 +13,7 @@ class HistorySyncTests(unittest.TestCase):
         client.history.return_value = iter([({'data': {'list': []}}, {})])
         self.assertEqual(sync_history(client, 'TEST', date(2026,10,18), date(2026,10,20)), 1)
         client.history.assert_called_once_with('TEST', '2026-10-18', '2026-10-21')
-        mark.assert_called_once_with('TEST', date(2026,10,18), date(2026,10,20))
+        mark.assert_called_once_with('TEST', date(2026,10,18), date(2026,10,20), date(2026,10,20))
 
     @patch('history_sync.mark_history')
     @patch('history_sync.save')
@@ -23,6 +23,16 @@ class HistorySyncTests(unittest.TestCase):
         client.history.return_value = iter([])
         sync_history(client, 'TEST', date(2026,10,18), date(2026,10,29))
         client.history.assert_called_once_with('TEST', '2026-10-19', '2026-10-30')
+
+    @patch('history_sync.mark_history')
+    @patch('history_sync.save')
+    @patch('history_sync.history_checkpoint', return_value={'start_date':date(2026,10,18),'scanned_through':date(2026,10,29),'reconciled_on':date(2026,10,29)})
+    def test_regular_cycle_only_reads_today_after_daily_reconcile(self, checkpoint, save, mark):
+        client = Mock()
+        client.history.return_value = iter([])
+        sync_history(client, 'TEST', date(2026,10,18), date(2026,10,29))
+        client.history.assert_called_once_with('TEST', '2026-10-29', '2026-10-30')
+        mark.assert_called_once_with('TEST', date(2026,10,18), date(2026,10,29), None)
 
     @patch('history_sync.mark_history')
     @patch('history_sync.save')

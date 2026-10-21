@@ -1,3 +1,8 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
 services:
   db:
     image: postgres:17
@@ -13,6 +18,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *logging
   web:
     build: .
     restart: unless-stopped
@@ -24,6 +30,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import socket;socket.create_connection(('127.0.0.1',8000),3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging: *logging
   collector:
     build: .
     restart: unless-stopped
@@ -34,6 +46,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    logging: *logging
   weather:
     build: .
     restart: unless-stopped
@@ -44,5 +57,32 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    logging: *logging
+  backup:
+    # Daily compressed dump into ./backups, keeping BACKUP_KEEP_DAYS (default 14).
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: solar
+      PGDATABASE: solar
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
+      KEEP: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    entrypoint: [sh, -c]
+    command:
+      - |
+        umask 077
+        while true; do
+          f=/backups/solar-$$(date -u +%Y%m%d-%H%M).sql.gz
+          if pg_dump --no-owner | gzip > "$$f.tmp"; then mv "$$f.tmp" "$$f"; echo "Respaldo $$f"; else rm -f "$$f.tmp"; echo "Respaldo fallido"; fi
+          find /backups -name 'solar-*.sql.gz' -mtime +$$KEEP -delete
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
 volumes:
   solar_data:
