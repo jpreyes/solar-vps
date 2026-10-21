@@ -40,7 +40,10 @@ def config():
         # ~0.2 kWh. Rain alone showed no large outages (>= 60 mm: 0 of 5 days), so it is off.
         'storm_gust_kmh': float(os.getenv('CONTROL_STORM_GUST_KMH', '60')),
         'storm_rain_mm': float(os.getenv('CONTROL_STORM_RAIN_MM', '0')),
-        'calibration': os.getenv('CONTROL_CALIBRATION', '1') == '1',
+        # Off by default: on some Voltronic units the utility charge limit (MCG, program 11) is
+        # ignored and grid charging follows the total limit (MCC, program 02), which could exceed
+        # the house supply. Enable only after a supervised test of the real grid draw.
+        'calibration': os.getenv('CONTROL_CALIBRATION', '0') == '1',
         'calibration_days': int(os.getenv('CONTROL_CALIBRATION_DAYS', '10')),
         'charger': int(os.getenv('CONTROL_CHARGER', '3')),
         'min_soc': int(os.getenv('CONTROL_MIN_SOC', '15')),
@@ -359,7 +362,8 @@ def main():
             print(f'  {key:5s} {name:10s} {params.get(key)!r}')
         # Read-only: charge/discharge current limits vs the battery (150 A recommended, 200 A max).
         for key, label in (('MCC', 'corriente máx. de carga total (A)'), ('MCG', 'corriente máx. de carga desde la red (A)'),
-                           ('MDC', 'corriente máx. de descarga (A)'), ('BCU', 'corte por SOC bajo (%)')):
+                           ('MDC', 'corriente máx. de descarga (A)'), ('BCU', 'corte por SOC bajo (%)'),
+                           ('EQ', 'ecualización (debe estar en 0 con LiFePO4)')):
             if key in params:
                 print(f'  {key:5s} {label:42s} {params.get(key)!r}')
         print('Parámetros informados por el equipo:', ', '.join(sorted(params)))

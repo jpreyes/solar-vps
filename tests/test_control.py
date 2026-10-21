@@ -14,7 +14,8 @@ SPRING_NOON = datetime(2026, 10, 21, 15, 0, tzinfo=timezone.utc)
 def cfg(**over):
     with patch.dict(os.environ, {}, clear=False):
         base = control.config()
-    base.update(mode='on', **over)
+    base.update(mode='on', calibration=True)
+    base.update(**over)
     return base
 
 
