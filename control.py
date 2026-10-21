@@ -357,6 +357,11 @@ def main():
         print('Datalogger WiFi, versión:', link.get('wifi_version'), '· firmware equipo:', ', '.join(map(str, link.get('firmware') or [])) or '—')
         for name, key in KEYS.items():
             print(f'  {key:5s} {name:10s} {params.get(key)!r}')
+        # Read-only: charge/discharge current limits vs the battery (150 A recommended, 200 A max).
+        for key, label in (('MCC', 'corriente máx. de carga total (A)'), ('MCG', 'corriente máx. de carga desde la red (A)'),
+                           ('MDC', 'corriente máx. de descarga (A)'), ('BCU', 'corte por SOC bajo (%)')):
+            if key in params:
+                print(f'  {key:5s} {label:42s} {params.get(key)!r}')
         print('Parámetros informados por el equipo:', ', '.join(sorted(params)))
         return
     if args.once:
