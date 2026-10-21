@@ -51,7 +51,7 @@ function drawDaily(){
 }
 
 function adviceFor(day,loadKwh){
-  if((day.gust_max_kmh||0)>=70)return ['warn','Viento fuerte (ráfagas '+fmt(day.gust_max_kmh,0)+' km/h): conviene reserva de batería 40/50 ante posibles cortes.'];
+  if((day.gust_max_kmh||0)>=60)return ['warn','Viento fuerte (ráfagas '+fmt(day.gust_max_kmh,0)+' km/h): conviene reserva de batería 40/50 ante posibles cortes.'];
   if(day.hours<20)return ['', 'Resto del día: ~'+fmt(day.pv_kwh,0)+' kWh solares.'];
   if(day.pv_kwh>=loadKwh*1.6)return ['good','Sol suficiente para cubrir el consumo y llenar la batería.'];
   if(day.pv_kwh>=loadKwh*0.8)return ['','Sol justo: la batería se recargará parcialmente.'];

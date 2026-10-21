@@ -34,10 +34,11 @@ def config():
         'winter': env_pair('CONTROL_WINTER', '40/50'),
         'winter_months': {int(m) for m in months.split(',') if m.strip()},
         'storm': os.getenv('CONTROL_STORM', '1') == '1',
-        # Valdivia 2015-2025 outside June-July: gusts >= 70 km/h ~7 days/year, >= 80 km/h ~2.
-        # Heavy rain alone does not cut the local grid (owner's experience), so rain is off by default
-        # (CONTROL_STORM_RAIN_MM=0); mean wind >= 50 km/h practically never occurs.
-        'storm_gust_kmh': float(os.getenv('CONTROL_STORM_GUST_KMH', '70')),
+        # SEC outage records for Valdivia 2025-2026 vs forecast gusts: days with >= 2000 customers
+        # out go from ~3 % below 50 km/h to 12-14 % at 50-70 and >= 50 % above 70. A 60 km/h trigger
+        # fires ~13 days/year and anticipates 6 of 29 large-outage days; each reserve day costs
+        # ~0.2 kWh. Rain alone showed no large outages (>= 60 mm: 0 of 5 days), so it is off.
+        'storm_gust_kmh': float(os.getenv('CONTROL_STORM_GUST_KMH', '60')),
         'storm_rain_mm': float(os.getenv('CONTROL_STORM_RAIN_MM', '0')),
         'calibration': os.getenv('CONTROL_CALIBRATION', '1') == '1',
         'calibration_days': int(os.getenv('CONTROL_CALIBRATION_DAYS', '10')),
