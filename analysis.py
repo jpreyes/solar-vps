@@ -13,8 +13,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
-from battery_strategy import (System, Strategy, LOAD_SHAPE, cost, pv_from_irradiance, pv_from_planes,
-                              seasonal_load_factor, simulate)
+from battery_strategy import (System, Strategy, LOAD_SHAPE, battery_life, cost, pv_from_irradiance,
+                              pv_from_planes, seasonal_load_factor, simulate)
 from storage import connect
 
 MAX_GAP = 900  # seconds; never integrate power across longer outages
@@ -204,8 +204,8 @@ def insights(series, now=None):
     days_since_full = (now - max(full)).days if full else None
     if series and (days_since_full is None and (now - series[0][0]).days >= 10 or (days_since_full or 0) >= 10):
         alerts.append({'level': 'info', 'code': 'no_full_charge',
-                       'text': 'La batería no llega al 100 % hace 10 días o más: el SOC del BMS puede descalibrarse. '
-                               'Conviene una carga completa (día soleado o carga puntual).',
+                       'text': 'La batería no llega al 100 % hace 10 días o más: el BMS no balancea celdas ni recalibra el SOC. '
+                               'Conviene una carga de calibración: una noche con el cargador en “solar + red” hasta 100 %, y luego volver a “solo solar”.',
                        'last': max(full) if full else None})
     hot = [t for t, d in recent if (d['inner_temp'] or 0) >= 60 or (d['max_temp'] or 0) >= 70]
     if hot:
@@ -337,7 +337,11 @@ def candidate_strategies():
         strategy = Strategy.seasonal((floor, floor + 10), (40, 50), summer_months=tuple(m for m in range(1, 13) if m not in months))
         strategy.name = f'{floor}/{floor + 10} · 40/50 {label}'
         out.append(strategy)
-    return out
+    calibrate = Strategy.fixed(floor, floor + 10)
+    calibrate.calibrate_days, calibrate.name = 10, f'{floor}/{floor + 10} + carga de calibración desde red (10 días)'
+    grid = Strategy.fixed(floor, floor + 10)
+    grid.grid_charge_kw, grid.name = 3.0, f'{floor}/{floor + 10} + la red carga la batería'
+    return out + [calibrate, grid]
 
 
 def full_charge_stats(days, trace, winter=(6, 7)):
@@ -400,6 +404,10 @@ def strategy_study(series=None, current=None, now=None):
         total, months = simulate(steps, system, strategy, trace=trace)
         results.append({'name': strategy.name, 'low': strategy.low, 'high': strategy.high,
                         **full_charge_stats(days, trace),
+                        'life': battery_life(total, years, temp_c=env_float('BATTERY_TEMP_C', '20'),
+                                             calendar_pct_year=env_float('BATTERY_CALENDAR_PCT_YEAR', '1.5'),
+                                             cycles_to_80=env_float('BATTERY_CYCLES_TO_80', '6000')),
+                        'grid_charged_kwh_year': round(total['grid_charged'] / years),
                         'grid_kwh_year': round(total['grid'] / years), 'cycles_year': round(total['cycles'] / years),
                         'transfers_year': round(total['transfers'] / years),
                         'self_sufficiency': round(total['self_sufficiency'], 3),

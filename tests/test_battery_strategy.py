@@ -64,3 +64,29 @@ class FullChargeTests(unittest.TestCase):
         stats = full_charge_stats(days, trace)
         self.assertAlmostEqual(stats['winter_full_days'], 0.1)
         self.assertEqual(stats['streak_worst_days'], 9)
+
+
+class GridChargeAndLifeTests(unittest.TestCase):
+    def test_grid_charging_with_flat_tariff_only_adds_grid_energy(self):
+        steps = days(30, pv_day=12)
+        plain, _ = simulate(steps, System(capacity_kwh=15), Strategy.fixed(20, 30))
+        grid = Strategy.fixed(20, 30)
+        grid.grid_charge_kw = 3
+        charged, _ = simulate(steps, System(capacity_kwh=15), grid)
+        self.assertGreater(charged['grid_charged'], 0)
+        self.assertGreater(charged['grid'], plain['grid'])
+
+    def test_calibration_charge_reaches_full_after_dry_spell(self):
+        cal = Strategy.fixed(20, 30)
+        cal.calibrate_days = 5
+        trace = []
+        result, _ = simulate(days(20, pv_day=2), System(capacity_kwh=15), cal, trace=trace)
+        self.assertGreaterEqual(result['calibrations'], 2)
+        self.assertGreaterEqual(max(trace), 99)
+
+    def test_life_is_calendar_dominated_at_low_cycle_counts(self):
+        from battery_strategy import battery_life
+        r, _ = simulate(days(365, pv_day=20), System(capacity_kwh=15), Strategy.fixed(20, 30))
+        life = battery_life(r, 1.0)
+        self.assertGreater(life['calendar_pct_year'], life['cycle_pct_year'])
+        self.assertGreater(life['years_to_70'], life['years_to_80'])

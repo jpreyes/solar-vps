@@ -68,13 +68,50 @@ Misma simulación (~12 años, batería de 15,36 kWh, consumo medido), cambiando 
 - **Recomendación**: no justifica una obra solo por esto. Si la reparación de PV1 obliga a desmontar o recablear igual, y hay techo al oeste sin sombras, vale la pena dejarlo **al oeste a ~25°**. Si no, la configuración actual está bien.
 - En la app basta con `PV1_AZIMUTH=270` (y `PV1_TILT`) en `.env` para que el pronóstico, el “solar esperado” y el estudio usen la nueva geometría.
 
+## ¿Conviene cargar la batería también desde la red?
+
+Configuración actual (PV1 25° este + PV2 40° este), batería de 15,36 kWh, tarifa plana. “Red→batería” es la energía de la red que entra a la batería. La vida útil es el tiempo hasta 80 % y 70 % de la capacidad original.
+
+| Estrategia | Red kWh/año | Red→batería | Días al 100 % jun–jul | Racha sin llenarse (peor) | Vida a 80 % / 70 % | Costo anual* |
+|---|---|---|---|---|---|---|
+| 20/30 todo el año, solo solar | **418** | 0 | 18 % | 20 d (42) | 12,1 / 18,2 años | **$182.000** |
+| 20/30 · 40/50 jun–jul, solo solar | 438 | 0 | 31 % | 12 d (21) | 12,0 / 18,0 años | $186.000 |
+| **20/30 + carga de calibración desde la red** (una noche al 100 % tras 10 días sin llenarse) | 429 | 30 | 25 % | **9 d (10)** | 12,1 / 18,1 años | $185.000 |
+| 20/30 + la red carga la batería siempre (“solar + red”, 3 kW) | 478 | 367 | 24 % | 19 d (27) | 11,7 / 17,5 años | $206.000 |
+| 40/50 + la red carga siempre | 573 | 443 | 35 % | 10 d (21) | 11,4 / 17,2 años | ≈ $230.000 |
+| Respaldo puro: 90/100 + red (batería siempre llena) | 2.185 | 1.409 | 100 % | 0 | 11,2 / 16,8 años | ≈ $600.000 |
+
+\* Red a $230/kWh más desgaste de batería a $45/kWh entregado.
+
+- **Cargar desde la red todo el tiempo es peor**: con tarifa plana se compra la misma energía y se pierde ~13 % al pasarla por la batería y el inversor. Son +60 kWh/año (≈ +$24.000) y más ciclos. Solo convendría con una tarifa horaria (noche barata), que no es la tarifa residencial BT1.
+- **La carga de calibración sí conviene.** Cuesta ~11 kWh/año (≈ $3.000) frente a 20/30 puro, y deja la racha máxima sin carga completa en ~10 días, mejor que 40/50 en junio–julio (21 días) y más barata. Es un ajuste manual de 2 a 4 veces por invierno: cuando el panel avise “10 días sin llegar al 100 %”, poner el cargador en “solar + red” una noche y volver a “solo solar” al día siguiente.
+- **Qué elegir:** si te importa la reserva ante cortes en invierno, 40/50 en junio–julio. Si prefieres lo más barato y saludable para el BMS, 20/30 todo el año con calibración desde la red cuando el panel lo pida. Las dos son buenas; la carga permanente desde la red, no.
+
+## ¿Cuánto durará la batería?
+
+Estimación aproximada para el LiFePO4 NM51.2-300ES01 con ~120 ciclos completos equivalentes al año:
+
+- **≈ 12 años hasta 80 % de capacidad y ≈ 18 años hasta 70 %**, en cualquiera de las estrategias razonables. Las diferencias entre estrategias son de meses, no de años.
+- Manda el **envejecimiento por calendario** (~1,25 %/año), no el uso (~0,4 %/año). 120 ciclos al año son pocos: 6.000 ciclos tardarían ~50 años.
+- El factor que más pesa es la **temperatura del lugar** donde está la batería:
+
+| Envejecimiento por calendario (25 °C, 50 % carga) | Batería a 15 °C | a 20 °C | a 25 °C |
+|---|---|---|---|
+| 1,0 %/año (optimista) | 20 / 30 años | 16 / 24 años | 12,5 / 19 años |
+| 1,5 %/año (central) | 15 / 23 años | **12 / 18 años** | 9 / 14 años |
+| 2,0 %/año (conservador) | 12,5 / 19 años | 9,6 / 14 años | 7 / 11 años |
+
+  (años hasta 80 % / hasta 70 %). El modelo es lineal y por eso conservador: en la práctica el envejecimiento por calendario se frena con los años.
+- Lo que más alarga la vida: mantenerla fresca (bajo techo, lejos del sol y de fuentes de calor; idealmente 15–20 °C), no tenerla al 100 % por largos periodos en verano y no cargar desde la red sin necesidad. La garantía típica de estos equipos es de 10 años o 6.000 ciclos; tu uso queda muy por debajo del límite de ciclos.
+- Supuestos ajustables en `.env`: `BATTERY_TEMP_C`, `BATTERY_CALENDAR_PCT_YEAR`, `BATTERY_CYCLES_TO_80`. El panel muestra la vida estimada de cada estrategia.
+
 ## Ajustes sugeridos en el inversor
 
 Verifica los números de programa en el manual de tu firmware; en la serie VM II suelen ser los siguientes.
 
 - Prioridad de salida **SBU**.
 - SOC/tensión de **vuelta a red: 20 %** (programa 12). SOC de **vuelta a batería: 30 %** (programa 13; hoy está en ~50 %).
-- Prioridad del cargador **solo solar (OSO)** mientras la tarifa sea plana (BT1). Tus datos muestran que ya no carga desde la red.
+- Prioridad del cargador **solo solar (OSO)** mientras la tarifa sea plana (BT1). Tus datos muestran que ya no carga desde la red. Solo cambiar a “solar + red” una noche para la carga de calibración cuando el panel la pida.
 - **Junio y julio: 40/50.** Resto del año: 20/30. Con temporal anunciado, subir temporalmente a 40/50.
 
 ## Pendientes de validar con más datos

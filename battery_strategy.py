@@ -39,6 +39,9 @@ class Strategy:
     name: str
     low: dict = field(default_factory=dict)    # month -> back-to-grid SOC %
     high: dict = field(default_factory=dict)   # month -> back-to-battery SOC %
+    grid_charge_kw: float = 0.0   # charger "solar + utility": grid tops up the battery in line mode
+    calibrate_days: int = 0       # grid full charge at night after this many days without 100 %
+    calibrate_kw: float = 3.0
 
     @classmethod
     def fixed(cls, low, high):
@@ -88,10 +91,17 @@ def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0, trace=None
     cap = system.capacity_kwh
     soc = cap * start_soc / 100
     on_grid = False
-    t = dict(pv=0.0, load=0.0, grid=0.0, curtailed=0.0, charged=0.0, discharged=0.0,
-             transfers=0, hours=0, hours_below_30=0, hours_on_grid=0, soc_sum=0.0)
+    t = dict(pv=0.0, load=0.0, grid=0.0, curtailed=0.0, charged=0.0, discharged=0.0, grid_charged=0.0,
+             transfers=0, hours=0, hours_below_30=0, hours_on_grid=0, hours_above_95=0, soc_sum=0.0,
+             calendar_stress=0.0, calibrations=0)
     months = {}
+    hours_since_full, calibrating = 0, False
     for month, pv, load in steps:
+        if (strategy.calibrate_days and not calibrating and pv <= 0
+                and hours_since_full >= strategy.calibrate_days * 24):
+            calibrating, t['calibrations'] = True, t['calibrations'] + 1
+            if not on_grid:
+                on_grid, t['transfers'] = True, t['transfers'] + 1
         load += system.idle_kw * step_hours
         low, high = cap * strategy.low[month] / 100, cap * strategy.high[month] / 100
         m = months.setdefault(month, dict(pv=0.0, load=0.0, grid=0.0, curtailed=0.0, discharged=0.0, n=0))
@@ -104,6 +114,12 @@ def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0, trace=None
             charged = min(surplus, charge_room, charge_limit)
             curtailed = surplus - charged
             grid = load - direct
+            rate = strategy.calibrate_kw if calibrating else strategy.grid_charge_kw
+            if rate > 0:
+                from_grid = max(0.0, min(charge_room - charged, rate * step_hours, charge_limit - charged))
+                charged += from_grid
+                grid += from_grid
+                t['grid_charged'] += from_grid
         else:
             if pv >= load:
                 charged = min(pv - load, charge_room, charge_limit)
@@ -115,11 +131,14 @@ def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0, trace=None
                 grid = need - discharged
         soc += charged * system.charge_eff - discharged / system.discharge_eff
         soc = max(0.0, min(cap, soc))
+        pct = soc / cap * 100
+        hours_since_full = 0 if pct >= 98 else hours_since_full + 1
+        if calibrating and pct >= 99:
+            calibrating = False
         if not on_grid and soc <= low + 1e-9 and grid > 0:
             on_grid, t['transfers'] = True, t['transfers'] + 1
-        elif on_grid and soc >= high - 1e-9:
+        elif on_grid and not calibrating and soc >= high - 1e-9:
             on_grid, t['transfers'] = False, t['transfers'] + 1
-        pct = soc / cap * 100
         if trace is not None:
             trace.append(pct)
         for key, value in (('pv', pv), ('load', load), ('grid', grid), ('curtailed', curtailed),
@@ -131,11 +150,29 @@ def simulate(steps, system, strategy, start_soc=60.0, step_hours=1.0, trace=None
         t['hours'] += 1
         t['hours_below_30'] += pct < 30
         t['hours_on_grid'] += on_grid
+        t['hours_above_95'] += pct > 95
         t['soc_sum'] += pct
+        t['calendar_stress'] += 0.6 + 0.8 * pct / 100  # 1.0 at 50 % SOC, 1.4 at 100 %
     t['cycles'] = t['discharged'] / cap if cap else 0
     t['mean_soc'] = t['soc_sum'] / t['hours'] if t['hours'] else 0
     t['self_sufficiency'] = 1 - t['grid'] / t['load'] if t['load'] else 0
     return t, months
+
+
+def battery_life(result, years, temp_c=20.0, calendar_pct_year=1.5, cycles_to_80=6000):
+    """Rough LiFePO4 ageing: calendar fade (SOC- and temperature-dependent) plus cycle fade.
+
+    calendar_pct_year: capacity loss per year at 25 °C and 50 % SOC (literature/field
+    range ~1-2 %/year); doubled per +10 °C. Cycle fade: 20 % after `cycles_to_80`
+    equivalent full cycles (typical 6000 @ 80 % DoD datasheets). Linear in time,
+    which is conservative: real calendar fade slows down with age.
+    """
+    hours = result['hours'] or 1
+    calendar = calendar_pct_year * 2 ** ((temp_c - 25) / 10) * result['calendar_stress'] / hours
+    cycling = result['cycles'] / years * 20 / cycles_to_80
+    fade = calendar + cycling
+    return {'fade_pct_year': round(fade, 2), 'calendar_pct_year': round(calendar, 2), 'cycle_pct_year': round(cycling, 2),
+            'years_to_80': round(20 / fade, 1), 'years_to_70': round(30 / fade, 1)}
 
 
 def cost(result, years, tariff_clp_kwh=230.0, wear_clp_kwh=45.0):
