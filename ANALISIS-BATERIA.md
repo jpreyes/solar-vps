@@ -50,6 +50,24 @@ Conclusiones:
 5. **Con temporal anunciado**, fuera de junio–julio, conviene subir temporalmente a 40/50. El panel avisa con viento ≥ 50 km/h o lluvia ≥ 25 mm, y alerta si pasan 10 días sin carga completa.
 6. **El sol perdido es enorme pero difícil de aprovechar**: ~6.200 kWh/año (≈ 58 % del potencial, casi todo de octubre a marzo), porque la batería se llena y no hay exportación. Con la batería de 15 kWh, mover consumo a la mañana ya solo ahorra ~30 kWh/año: la batería cubre casi todo. Ese excedente solo rinde exportándolo (net billing, Ley 20.571, con inversor/configuración que inyecte y declaración TE4) o con cargas nuevas en horas de sol que reemplacen gas o leña: termo eléctrico, bomba de calor o auto eléctrico.
 
+## ¿Conviene girar PV1 al oeste?
+
+Misma simulación (~12 años, batería de 15,36 kWh, consumo medido), cambiando solo PV1. PV2 queda a 40° este.
+
+| Configuración | Solar kWh/año | Antes de 12 h / después de 15 h | Red kWh/año (20/30) | Ciclos de batería/año | Horas/año en modo red | Días al 100 % jun–jul* | Costo anual (20/30) |
+|---|---|---|---|---|---|---|---|
+| Actual: PV1 25° este | 10.764 | 43 % / 19 % | 417 | 124 | 931 | 31 % | $182.000 |
+| PV1 40° oeste | 10.612 | 30 % / 35 % | 401 | 109 | 880 | 30 % | $168.000 |
+| PV1 25° oeste | 10.925 | 31 % / 32 % | 388 | 111 | 854 | 31 % | $166.000 |
+
+\* Con la estrategia 20/30 + 40/50 en junio–julio. La racha típica sin llenarse es de 12 días (peor 21) en la actual y en oeste 25°, y de 15 días (peor 28) en oeste 40°.
+
+- **Oeste es algo mejor, pero poco.** La producción anual casi no cambia (−1 % a 40°, +1,5 % a 25°), y el invierno es igual: ~10 kWh/día en junio en los tres casos. Lo que cambia es el horario: con un string al oeste hay sol hasta las 19–20 h y cubre parte del peak de la tarde-noche sin pasar por la batería.
+- **El ahorro de red es chico**: 16–29 kWh/año, unos $4.000–7.000. La diferencia de costo de la tabla viene sobre todo de **~12 % menos ciclos de batería** (124 → 109–111 al año), que alarga su vida útil en la misma proporción. Ese valor depende del desgaste supuesto ($45/kWh).
+- **Si se gira, mejor a 25° que a 40°**: al oeste, 25° rinde ~300 kWh/año más y mantiene mejor las cargas completas de invierno.
+- **Recomendación**: no justifica una obra solo por esto. Si la reparación de PV1 obliga a desmontar o recablear igual, y hay techo al oeste sin sombras, vale la pena dejarlo **al oeste a ~25°**. Si no, la configuración actual está bien.
+- En la app basta con `PV1_AZIMUTH=270` (y `PV1_TILT`) en `.env` para que el pronóstico, el “solar esperado” y el estudio usen la nueva geometría.
+
 ## Ajustes sugeridos en el inversor
 
 Verifica los números de programa en el manual de tu firmware; en la serie VM II suelen ser los siguientes.
