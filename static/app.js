@@ -126,7 +126,7 @@ canvas.addEventListener('pointerup',()=>{if(!drag)return;const selected=drag;dra
 canvas.addEventListener('pointercancel',()=>{drag=null;draw()});
 canvas.addEventListener('dblclick',()=>{if(previousRange)run(()=>changeRange(...previousRange))});
 setDates(...solarTime.range('today'),'today');
-async function updatePanel(){const results=await Promise.allSettled([status(),load(),updateWeather(),updateAlerts(),updateDaily()]);const failure=results.find(result=>result.status==='rejected');if(failure)throw failure.reason}
+async function updatePanel(){const results=await Promise.allSettled([status(),load(),updateWeather(),updateAlerts(),updateDaily(),updateControl()]);const failure=results.find(result=>result.status==='rejected');if(failure)throw failure.reason}
 run(async()=>{await updatePanel();await refresh()});
 run(updateStrategy);
 setInterval(()=>{if(!document.hidden)run(async()=>{if(activeRange&&activeRange!=='yesterday')setDates(...solarTime.range(activeRange),activeRange);await updatePanel();await refresh()})},60000);

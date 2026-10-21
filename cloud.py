@@ -1,7 +1,9 @@
-"""Read-only client derived from the public tumcapp.com web application.
+"""Client derived from the public tumcapp.com web application.
 
-No control commands, device binding, sync, firmware or settings operations.
-This is an undocumented API and requires validation with the owner's account.
+Reads are limited to READ_PATHS. The only write is `send_settings`, restricted
+to three whitelisted battery commands (SETTING_COMMAND): SOC back-to-grid,
+SOC back-to-battery and charger priority. No device binding, sync, firmware,
+output, grid or other settings. Undocumented API: validate with the owner's account.
 """
 import hashlib
 import random
@@ -9,6 +11,7 @@ import time
 import requests
 import threading
 import json
+import re
 from datetime import datetime,timezone
 from email.utils import parsedate_to_datetime
 
@@ -16,6 +19,12 @@ BASE = 'https://isolar.tumcapp.com'
 LOGIN = '/api/admin/user/login'
 REAL = '/api/admin/realData/getRealByDeviceSn'
 HISTORY = '/api/admin/workInfo/getHistoricalData'
+PARAM_GET = '/api/admin/paramSet/getParam'
+PARAM_SET = '/api/admin/paramSet/setParam'
+READ_PATHS = (REAL, HISTORY, PARAM_GET)
+# PBCC = back to grid at SOC %, PBDC = back to battery at SOC %, PCP0n = charger priority
+# (1 solar first, 2 solar + utility, 3 solar only). Format taken from the portal bundle.
+SETTING_COMMAND = re.compile(r'(PBCC\d{3}|PBDC\d{3}|PCP0[123])')
 
 
 class CloudError(Exception):
@@ -91,7 +100,7 @@ class Cloud:
             return self._read(path, payload)
 
     def _read(self, path, payload):
-        if path not in (REAL, HISTORY):
+        if path not in READ_PATHS:
             raise ValueError('Operación no permitida')
         if not self.token:
             self.login()
@@ -108,6 +117,28 @@ class Cloud:
         if not isinstance(result.get('data'), dict) or not result['data']:
             raise CloudError('Lectura vacía o formato desconocido')
         return result
+
+    def params(self, sn):
+        """Current settings as reported by the device: {key: 'value min~max' | 'value a,b,c'}."""
+        result = self.read(PARAM_GET, {'deviceSn': sn})
+        if not isinstance(result.get('data'), dict) or not result['data']:
+            raise CloudError('Parámetros vacíos o formato desconocido')
+        return result['data']
+
+    def send_settings(self, sn, commands):
+        """Send up to three whitelisted battery commands. Returns the vendor result code."""
+        if not commands or len(commands) > 3 or not all(isinstance(c, str) and SETTING_COMMAND.fullmatch(c) for c in commands):
+            raise ValueError('Comando de configuración no permitido')
+        payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{i + 1}': c for i, c in enumerate(commands)},
+                                                         separators=(',', ':'))}
+        with self.lock:
+            if not self.token:
+                self.login()
+            result = self._post(PARAM_SET, payload)
+            if str(result['code']) in ('450', '401', '403'):
+                self.login()
+                result = self._post(PARAM_SET, payload)
+        return str(result['code'])
 
     def history(self, sn, start, end):
         page = 1

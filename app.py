@@ -11,6 +11,7 @@ from storage import connect, init
 from cloud import Cloud, CloudError
 from storage import save,device_time
 import psycopg
+import psycopg.types.json
 from werkzeug.exceptions import HTTPException
 from scheduler import settings, set_interval
 from weather import weather_status,weather_id
@@ -282,6 +283,65 @@ def series():
           SELECT * FROM ordered ORDER BY observed_at LIMIT 5001''', (start, end)).fetchall()
     return jsonify(rows=rows[:5000], truncated=len(rows) > 5000,
                    time_basis='observed_at: fecha de la medición; recepción si falta una fecha interpretable')
+
+
+@app.get('/api/control')
+@protected
+def control_status():
+    import control
+    cfg=control.config()
+    with connect() as db:
+        st=db.execute('SELECT * FROM control_state WHERE id=1').fetchone()
+        actions=db.execute('SELECT * FROM control_actions ORDER BY id DESC LIMIT 20').fetchall()
+    return jsonify(mode=cfg['mode'],state=st,actions=actions,charger_labels=control.CHARGER,
+                   config={k:(sorted(v) if isinstance(v,set) else v) for k,v in cfg.items()})
+
+
+def _same_origin():
+    return request.headers.get('Origin') == request.host_url.rstrip('/')
+
+
+@app.post('/api/control/enabled')
+@protected
+def control_enabled():
+    if not _same_origin():
+        return jsonify(error='Origen no permitido'),403
+    import control
+    if control.config()['mode']!='on':
+        return jsonify(error='El control está en modo '+control.config()['mode']+'; cambia CONTROL_MODE=on en el VPS para activarlo.'),409
+    enabled=(request.get_json(silent=True) or {}).get('enabled')
+    if not isinstance(enabled,bool):
+        raise ValueError('Indica enabled true o false')
+    with connect() as db:
+        db.execute('UPDATE control_state SET enabled=%s,paused_reason=NULL,updated_at=now() WHERE id=1',(enabled,))
+    return jsonify(ok=True)
+
+
+@app.post('/api/control/request')
+@protected
+def control_request():
+    if not _same_origin():
+        return jsonify(error='Origen no permitido'),403
+    import control
+    cfg=control.config()
+    if cfg['mode']=='off':
+        return jsonify(error='El control está apagado (CONTROL_MODE=off).'),409
+    data=request.get_json(silent=True) or {}
+    presets={'base':(*cfg['base'],cfg['charger'],'Base'),'winter':(*cfg['winter'],cfg['charger'],'Invierno / reserva')}
+    if data.get('preset') in presets:
+        low,high,charger,label=presets[data['preset']]
+    else:
+        low,high,charger,label=data.get('to_grid'),data.get('to_battery'),data.get('charger',cfg['charger']),'Personalizado'
+    hours=data.get('hours',24)
+    values=(low,high,charger,hours)
+    if not all(type(v) is int for v in values):
+        raise ValueError('Valores enteros requeridos')
+    if low%5 or high%5 or not (cfg['min_soc']<=low<=60) or not (low+5<=high<=100) or charger not in control.CHARGER or not 1<=hours<=336:
+        raise ValueError(f'Umbrales fuera de rango: vuelta a red {cfg["min_soc"]}–60 %, vuelta a batería ≥ red + 5, múltiplos de 5; cargador 1–3; 1–336 h.')
+    req={'to_grid':low,'to_battery':high,'charger':charger,'hours':hours,'label':f'{label} {low}/{high}'}
+    with connect() as db:
+        db.execute('UPDATE control_state SET request=%s,updated_at=now() WHERE id=1',(psycopg.types.json.Jsonb(req),))
+    return jsonify(ok=True,request=req)
 
 
 @app.get('/api/export.jsonl')

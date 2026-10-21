@@ -103,6 +103,15 @@ def init():
           temperature REAL, cloud_cover REAL, PRIMARY KEY(location,observed_at))''')
         db.execute('ALTER TABLE climate_hourly ADD COLUMN IF NOT EXISTS gti_planes REAL[]')
         db.execute('CREATE TABLE IF NOT EXISTS climate_meta (location TEXT PRIMARY KEY, planes JSONB NOT NULL)')
+        db.execute('''CREATE TABLE IF NOT EXISTS control_state (
+          id INTEGER PRIMARY KEY CHECK(id=1), enabled BOOLEAN NOT NULL DEFAULT false,
+          paused_reason TEXT, request JSONB, last_target JSONB, last_params JSONB,
+          params_at TIMESTAMPTZ, calibration_started TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+        db.execute('INSERT INTO control_state(id) VALUES (1) ON CONFLICT DO NOTHING')
+        db.execute('''CREATE TABLE IF NOT EXISTS control_actions (
+          id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(), mode TEXT NOT NULL,
+          reason TEXT NOT NULL, commands JSONB NOT NULL, before JSONB, response_code TEXT,
+          verified BOOLEAN, after JSONB, error TEXT)''')
         db.execute('''CREATE TABLE IF NOT EXISTS events (
           id BIGSERIAL PRIMARY KEY, time TIMESTAMPTZ NOT NULL DEFAULT now(),
           ok BOOLEAN NOT NULL, detail TEXT NOT NULL)''')

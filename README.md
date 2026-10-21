@@ -1,6 +1,6 @@
 # Solar VPS · VM II Premium+ 12K
 
-Primera versión para un inversor, alojada en tu propio Ubuntu. Recolector independiente de la web, PostgreSQL persistente, panel con gráficos y exportaciones Excel/CSV/JSONL. Sin comandos de control al inversor.
+Primera versión para un inversor, alojada en tu propio Ubuntu. Recolector independiente de la web, PostgreSQL persistente, panel con gráficos y exportaciones Excel/CSV/JSONL. Control automático opcional de tres ajustes de batería (apagado por defecto; ver «Control automático»).
 
 ## Novedades (análisis y gestión de batería)
 
@@ -16,6 +16,29 @@ Primera versión para un inversor, alojada en tu propio Ubuntu. Recolector indep
 Variables nuevas en `.env.example`: plano de cada string (`PV1_TILT`, `PV1_AZIMUTH`, `PV1_KWP`, `PV2_*`; azimut en grados de brújula: 0 = norte, 90 = este; cada string se modela por separado y comparten el tope de `PV_AC_LIMIT_KW`), potencia (`PV_KWP`, `PV_AC_LIMIT_KW`, `PV_PERFORMANCE_RATIO`), batería y economía (`BATTERY_KWH`, `BATTERY_MIN_SOC`, `GRID_TARIFF_CLP_KWH`, `BATTERY_WEAR_CLP_KWH`, `LOAD_WINTER_EXTRA`). Ajusta la tarifa a tu boleta. El análisis detallado con datos reales está en `ANALISIS-BATERIA.md`.
 
 Actualizar en el VPS: `docker compose up -d --build` (las migraciones de tablas son automáticas e idempotentes; los respaldos quedan en `./backups`).
+
+## Control automático de la batería (opcional)
+
+El servicio `control` puede cambiar desde el VPS, a través de la nube i.Solar, **solo tres ajustes**: SOC de vuelta a red (`PBCC`), SOC de vuelta a batería (`PBDC`) y prioridad del cargador (`PCP0`: 1 solar primero, 2 solar + red, 3 solo solar). El formato se obtuvo del JavaScript público del portal (pantalla de parámetros de la familia `prodId=30`, `subId=105`). No es una API documentada.
+
+Regla por defecto: 20/30 todo el año, 40/50 en junio y julio, 40/50 ante temporal pronosticado (viento ≥ 50 km/h o lluvia ≥ 25 mm hoy o mañana), y carga de calibración desde la red (cargador “solar + red” y vuelta a batería al 100 %) tras 10 días sin llegar al 100 %. Termina después de 45 min sobre 99 %. Todo es configurable con las variables `CONTROL_*`.
+
+Salvaguardas:
+
+- `CONTROL_MODE=off` por defecto: el servicio no hace nada. `dry-run` decide y registra sin enviar. `on` envía, pero la automatización además debe activarse en el panel.
+- Lista blanca de comandos en `cloud.py`; validación contra los rangos que informa el inversor, piso de seguridad `CONTROL_MIN_SOC`, histéresis mínima de 5 puntos y máximo `CONTROL_MAX_COMMANDS_DAY` comandos al día.
+- Cada cambio se verifica leyendo los parámetros de vuelta; si el equipo no lo confirma, la automatización se pausa.
+- Si alguien cambia los ajustes desde el inversor, el portal o la app del fabricante, se detecta y la automatización se pausa.
+- La web no envía comandos: deja una solicitud que el servicio `control` valida y aplica. Los ajustes manuales del panel se mantienen las horas indicadas.
+- Historial completo en la tabla `control_actions` y en el panel.
+
+Puesta en marcha recomendada:
+
+```bash
+docker compose run --rm control python control.py --status
+```
+
+Solo lee: muestra el tipo de batería y los valores y rangos de `BCRC`, `BCRD` y `PC` que informa tu equipo. Si `umbrales por SOC: True`, deja `CONTROL_MODE=dry-run` unos días (`docker compose up -d control`) y revisa en el panel qué habría hecho. Luego prueba **un** ajuste manual desde el panel con `CONTROL_MODE=on` y confirma en la pantalla del inversor que cambió. Recién entonces activa la automatización.
 
 ## Esquema de energía y meteorología de Valdivia
 
@@ -150,7 +173,10 @@ Las rutas de lectura permitidas en `cloud.py` son exclusivamente:
 POST /api/admin/user/login
 POST /api/admin/realData/getRealByDeviceSn
 POST /api/admin/workInfo/getHistoricalData
+POST /api/admin/paramSet/getParam
 ```
+
+La única escritura es `POST /api/admin/paramSet/setParam`, limitada a `PBCCnnn`, `PBDCnnn` y `PCP0[1-3]`, y usada solo por el servicio `control`.
 
 El portal usa contraseña MD5 en su protocolo de login (excepto usuarios VCN), token y firma `vrt` SHA-256 sobre parámetros. Se reproduce por compatibilidad, siempre sobre HTTPS con validación TLS. No se proporciona garantía de estabilidad del proveedor. Mantén las dependencias y las imágenes actualizadas.
 

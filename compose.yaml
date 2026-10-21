@@ -58,6 +58,18 @@ services:
       db:
         condition: service_healthy
     logging: *logging
+  control:
+    # Automatic battery settings through the i.Solar cloud. Inactive unless CONTROL_MODE=dry-run|on.
+    build: .
+    restart: unless-stopped
+    command: [python, control.py]
+    env_file: .env
+    environment:
+      DB_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
   backup:
     # Daily compressed dump into ./backups, keeping BACKUP_KEEP_DAYS (default 14).
     image: postgres:17
