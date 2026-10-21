@@ -34,7 +34,9 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual((base['to_grid'], base['to_battery'], base['charger']), (20, 30, 3))
         winter = control.desired(c, WINTER_NIGHT, {}, [], None, False)
         self.assertEqual((winter['to_grid'], winter['to_battery']), (40, 50))
-        storm = control.desired(c, SPRING_NOON, {}, [{'date': '2026-10-22', 'wind_max_kmh': 70, 'precipitation_mm': 3}], None, False)
+        rainy = control.desired(c, SPRING_NOON, {}, [{'date': '2026-10-21', 'gust_max_kmh': 45, 'precipitation_mm': 31.7}], None, False)
+        self.assertEqual(rainy['to_grid'], 20)  # ordinary Valdivia rain is not a storm
+        storm = control.desired(c, SPRING_NOON, {}, [{'date': '2026-10-22', 'gust_max_kmh': 85, 'precipitation_mm': 3}], None, False)
         self.assertEqual((storm['to_grid'], storm['to_battery']), (40, 50))
         self.assertIn('temporal', storm['reason'])
         cal = control.desired(c, WINTER_NIGHT, {'days_since_full_charge': 12}, [], None, False)

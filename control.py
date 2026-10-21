@@ -34,8 +34,10 @@ def config():
         'winter': env_pair('CONTROL_WINTER', '40/50'),
         'winter_months': {int(m) for m in months.split(',') if m.strip()},
         'storm': os.getenv('CONTROL_STORM', '1') == '1',
-        'storm_wind_kmh': float(os.getenv('CONTROL_STORM_WIND_KMH', '50')),
-        'storm_rain_mm': float(os.getenv('CONTROL_STORM_RAIN_MM', '25')),
+        # Valdivia 2015-2025: gusts >= 70 km/h ~7 days/year and rain >= 40 mm ~3 days/year outside
+        # June-July. Mean wind >= 50 km/h practically never occurs, so gusts are used instead.
+        'storm_gust_kmh': float(os.getenv('CONTROL_STORM_GUST_KMH', '70')),
+        'storm_rain_mm': float(os.getenv('CONTROL_STORM_RAIN_MM', '40')),
         'calibration': os.getenv('CONTROL_CALIBRATION', '1') == '1',
         'calibration_days': int(os.getenv('CONTROL_CALIBRATION_DAYS', '10')),
         'charger': int(os.getenv('CONTROL_CHARGER', '3')),
@@ -77,7 +79,7 @@ def storm_ahead(forecast, cfg, now=None):
     today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
     for day in forecast:
         if day['date'] in (today.isoformat(), (today + timedelta(days=1)).isoformat()):
-            if day['wind_max_kmh'] >= cfg['storm_wind_kmh'] or day['precipitation_mm'] >= cfg['storm_rain_mm']:
+            if day.get('gust_max_kmh', 0) >= cfg['storm_gust_kmh'] or day['precipitation_mm'] >= cfg['storm_rain_mm']:
                 return day
     return None
 
@@ -100,7 +102,7 @@ def desired(cfg, now, insight, forecast, calibration_started, calibration_done, 
     storm = storm_ahead(forecast, cfg, now) if cfg['storm'] else None
     if storm:
         low, high = max(low, cfg['winter'][0]), max(high, cfg['winter'][1])
-        reason = f'Reserva por temporal {storm["date"]} (viento {storm["wind_max_kmh"]} km/h, lluvia {storm["precipitation_mm"]} mm)'
+        reason = f'Reserva por temporal {storm["date"]} (ráfagas {storm.get("gust_max_kmh", 0)} km/h, lluvia {storm["precipitation_mm"]} mm)'
     target = {'to_grid': low, 'to_battery': high, 'charger': cfg['charger'], 'reason': reason, 'calibrating': False}
     days = insight.get('days_since_full_charge')
     if cfg['calibration'] and calibration_started is not None:

@@ -51,7 +51,7 @@ function drawDaily(){
 }
 
 function adviceFor(day,loadKwh){
-  if(day.wind_max_kmh>=50||day.precipitation_mm>=25)return ['warn','Temporal probable (viento '+day.wind_max_kmh+' km/h, '+fmt(day.precipitation_mm)+' mm). Si te preocupan cortes de luz, sube temporalmente el mínimo a 40–50 % para guardar reserva.'];
+  if((day.gust_max_kmh||0)>=70||day.precipitation_mm>=40)return ['warn','Temporal probable (ráfagas '+fmt(day.gust_max_kmh,0)+' km/h, '+fmt(day.precipitation_mm)+' mm). Conviene reserva de batería 40/50 ante posibles cortes.'];
   if(day.hours<20)return ['', 'Resto del día: ~'+fmt(day.pv_kwh,0)+' kWh solares.'];
   if(day.pv_kwh>=loadKwh*1.6)return ['good','Sol suficiente para cubrir el consumo y llenar la batería.'];
   if(day.pv_kwh>=loadKwh*0.8)return ['','Sol justo: la batería se recargará parcialmente.'];
@@ -60,7 +60,7 @@ function adviceFor(day,loadKwh){
 async function updateStrategy(){
   const r=await solarRequest('/api/strategy'),s=r.study;strategyData=s;
   const loadKwh=s.ready?s.load_daily_kwh[String(new Date().getMonth()+1)]:14;
-  document.getElementById('forecast').replaceChildren(...(r.forecast.length?r.forecast:[]).map(d=>{const [tone,text]=adviceFor(d,loadKwh);const date=new Date(d.date+'T12:00:00');return el('div',{class:'day '+tone},el('span',{},date.toLocaleDateString('es-CL',{weekday:'short',day:'numeric',month:'short'})),el('b',{},fmt(d.pv_kwh,0)+' kWh'),el('small',{},'nubes '+fmt(d.cloud_cover,0)+' % · viento '+fmt(d.wind_max_kmh,0)+' km/h'),el('p',{},text))}));
+  document.getElementById('forecast').replaceChildren(...(r.forecast.length?r.forecast:[]).map(d=>{const [tone,text]=adviceFor(d,loadKwh);const date=new Date(d.date+'T12:00:00');return el('div',{class:'day '+tone},el('span',{},date.toLocaleDateString('es-CL',{weekday:'short',day:'numeric',month:'short'})),el('b',{},fmt(d.pv_kwh,0)+' kWh'),el('small',{},'nubes '+fmt(d.cloud_cover,0)+' % · ráfagas '+fmt(d.gust_max_kmh,0)+' km/h · '+fmt(d.precipitation_mm)+' mm'),el('p',{},text))}));
   if(!r.forecast.length)document.getElementById('forecast').textContent='El pronóstico aparecerá tras la próxima descarga meteorológica.';
   if(!s.ready){document.getElementById('strategySummary').textContent=s.reason;return}
   const results=s.results,best=results.find(x=>x.name===s.best),current=results.find(x=>x.name.includes('(actual)'));
@@ -100,7 +100,7 @@ async function updateControl(){
   const parts=[];
   if(r.mode==='off')parts.push('Apagado: no se envía nada al inversor. Para probar, pon CONTROL_MODE=dry-run en el .env del VPS (solo simula y registra qué haría).');
   if(r.mode==='dry-run')parts.push('Simulación: decide y registra los cambios, pero no los envía.');
-  parts.push('Regla: '+cfg.base.join('/')+' todo el año, '+cfg.winter.join('/')+' en los meses '+cfg.winter_months.join(', ')+(cfg.storm?', '+cfg.winter.join('/')+' ante temporal (viento ≥ '+cfg.storm_wind_kmh+' km/h o lluvia ≥ '+cfg.storm_rain_mm+' mm)':'')+(cfg.calibration?' y carga de calibración desde la red tras '+cfg.calibration_days+' días sin llegar al 100 %':'')+'.');
+  parts.push('Regla: '+cfg.base.join('/')+' todo el año, '+cfg.winter.join('/')+' en los meses '+cfg.winter_months.join(', ')+(cfg.storm?', '+cfg.winter.join('/')+' ante temporal (ráfagas ≥ '+cfg.storm_gust_kmh+' km/h o lluvia ≥ '+cfg.storm_rain_mm+' mm)':'')+(cfg.calibration?' y carga de calibración desde la red tras '+cfg.calibration_days+' días sin llegar al 100 %':'')+'.');
   if(st.paused_reason)parts.push('⚠ '+st.paused_reason);
   document.getElementById('controlSummary').textContent=parts.join(' ');
   const facts=[];

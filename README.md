@@ -21,7 +21,7 @@ Actualizar en el VPS: `docker compose up -d --build` (las migraciones de tablas 
 
 El servicio `control` puede cambiar desde el VPS, a través de la nube i.Solar, **solo tres ajustes**: SOC de vuelta a red (`PBCC`), SOC de vuelta a batería (`PBDC`) y prioridad del cargador (`PCP0`: 1 solar primero, 2 solar + red, 3 solo solar). El formato se obtuvo del JavaScript público del portal (pantalla de parámetros de la familia `prodId=30`, `subId=105`). No es una API documentada.
 
-Regla por defecto: 20/30 todo el año, 40/50 en junio y julio, 40/50 ante temporal pronosticado (viento ≥ 50 km/h o lluvia ≥ 25 mm hoy o mañana), y carga de calibración desde la red (cargador “solar + red” y vuelta a batería al 100 %) tras 10 días sin llegar al 100 %. Termina después de 45 min sobre 99 %. Todo es configurable con las variables `CONTROL_*`.
+Regla por defecto: 20/30 todo el año, 40/50 en junio y julio, 40/50 ante temporal pronosticado (ráfagas ≥ 70 km/h o lluvia ≥ 40 mm hoy o mañana; en Valdivia ~9 días al año fuera de junio–julio), y carga de calibración desde la red (cargador “solar + red” y vuelta a batería al 100 %) tras 10 días sin llegar al 100 %. Termina después de 45 min sobre 99 %. Todo es configurable con las variables `CONTROL_*`.
 
 Salvaguardas:
 

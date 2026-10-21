@@ -440,7 +440,7 @@ def forecast(db=None):
           AND valid_at>now() ORDER BY valid_at''', (weather_id(),)).fetchall()
     rows = run(db) if db is not None else _with_db(run)
     system, zone, kwps = system_from_env(), tz(), plane_kwps()
-    days = defaultdict(lambda: {'pv_kwh': 0.0, 'hours': 0, 'cloud': [], 'wind': 0.0, 'rain': 0.0})
+    days = defaultdict(lambda: {'pv_kwh': 0.0, 'hours': 0, 'cloud': [], 'wind': 0.0, 'gust': 0.0, 'rain': 0.0})
     for row in rows:
         p = row['payload']
         day = days[(row['valid_at'] - timedelta(hours=1)).astimezone(zone).date().isoformat()]
@@ -449,8 +449,10 @@ def forecast(db=None):
         if num(p.get('cloud_cover')) is not None:
             day['cloud'].append(num(p.get('cloud_cover')))
         day['wind'] = max(day['wind'], num(p.get('wind_speed_10m')) or 0)
+        day['gust'] = max(day['gust'], num(p.get('wind_gusts_10m')) or 0)
         day['rain'] += num(p.get('precipitation')) or 0
     return [{'date': k, 'pv_kwh': round(v['pv_kwh'], 1), 'hours': v['hours'],
              'cloud_cover': round(sum(v['cloud']) / len(v['cloud'])) if v['cloud'] else None,
-             'wind_max_kmh': round(v['wind']), 'precipitation_mm': round(v['rain'], 1)}
+             'wind_max_kmh': round(v['wind']), 'gust_max_kmh': round(v['gust']),
+             'precipitation_mm': round(v['rain'], 1)}
             for k, v in sorted(days.items())]

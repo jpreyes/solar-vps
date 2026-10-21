@@ -47,7 +47,7 @@ Conclusiones:
 2. **Recomendación: 20/30 de agosto a mayo y 40/50 en junio y julio.** Obtiene el mismo beneficio de cargas completas que aplicarlo de abril a septiembre, por solo ~20 kWh/año más de red (≈ $4.000). Además guarda ~3 kWh extra para cortes, unas 4–6 h de consumo normal, justo en la temporada de temporales.
 3. **Bajar la vuelta a batería de 50 % a 30 % sigue siendo útil** (−28 kWh/año frente a tu 22/50 actual). En modo red la casa compra todo a la red aunque haya sol, y con paneles al este la mañana es tu mejor momento de producción.
 4. Ir más bajo (15/25) no conviene: el ahorro es marginal, sube la profundidad de descarga y alarga aún más las rachas sin carga completa.
-5. **Con temporal anunciado**, fuera de junio–julio, conviene subir temporalmente a 40/50. El panel avisa con viento ≥ 50 km/h o lluvia ≥ 25 mm, y alerta si pasan 10 días sin carga completa.
+5. **Con temporal anunciado**, fuera de junio–julio, conviene subir temporalmente a 40/50. El panel avisa con ráfagas ≥ 70 km/h o lluvia ≥ 40 mm, y alerta si pasan 10 días sin carga completa.
 6. **El sol perdido es enorme pero difícil de aprovechar**: ~6.200 kWh/año (≈ 58 % del potencial, casi todo de octubre a marzo), porque la batería se llena y no hay exportación. Con la batería de 15 kWh, mover consumo a la mañana ya solo ahorra ~30 kWh/año: la batería cubre casi todo. Ese excedente solo rinde exportándolo (net billing, Ley 20.571, con inversor/configuración que inyecte y declaración TE4) o con cargas nuevas en horas de sol que reemplacen gas o leña: termo eléctrico, bomba de calor o auto eléctrico.
 
 ## ¿Conviene girar PV1 al oeste?

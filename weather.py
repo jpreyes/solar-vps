@@ -12,7 +12,7 @@ from storage import connect,init
 URL='https://api.open-meteo.com/v1/forecast'
 ARCHIVE_URL='https://archive-api.open-meteo.com/v1/archive'
 VARIABLES=('temperature_2m','relative_humidity_2m','precipitation','rain','showers','weather_code',
-           'cloud_cover','wind_speed_10m','wind_direction_10m','surface_pressure',
+           'cloud_cover','wind_speed_10m','wind_gusts_10m','wind_direction_10m','surface_pressure',
            'shortwave_radiation','direct_radiation','diffuse_radiation','direct_normal_irradiance',
            'global_tilted_irradiance')
 CLIMATE_VARIABLES=('shortwave_radiation','global_tilted_irradiance','temperature_2m','cloud_cover')
