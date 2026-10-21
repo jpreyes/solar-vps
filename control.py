@@ -176,6 +176,11 @@ def log_action(db, mode, reason, commands, before, code=None, verified=None, aft
       (mode, reason, Jsonb(commands), Jsonb(before), code, verified, Jsonb(after) if after else None, error)).fetchone()['id']
 
 
+def logged_recently(db, error, minutes=60):
+    return db.execute('''SELECT 1 FROM control_actions WHERE error=%s AND time > now() - %s * interval '1 minute' LIMIT 1''',
+                      (error, minutes)).fetchone() is not None
+
+
 def verify(client, sn, target, tries=10, wait=60, sleep=time.sleep):
     """Poll the device until it reports the requested values (the cloud relays commands asynchronously)."""
     current = None
@@ -219,6 +224,13 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         event(False, 'Control: cambio manual detectado, automatización en pausa')
         return 'Cambio manual detectado: en pausa.'
     target = desired(cfg, now, insight, analysis.forecast(), st['calibration_started'], calibration_done, st['last_target'])
+    requested_at = datetime.fromisoformat(request['requested_at']) if request and request.get('requested_at') else now
+    if request and now - requested_at > timedelta(hours=12):
+        with connect() as db:
+            db.execute('UPDATE control_state SET request=NULL WHERE id=1')
+            log_action(db, cfg['mode'], 'Solicitud manual: ' + request.get('label', ''), [], snapshot(current),
+                       error='Solicitud vencida: el equipo no estuvo disponible en 12 h')
+        request = None
     if request:
         hours = min(max(int(request.get('hours', 24)), 1), 24 * 14)
         target = {**target, **{k: request[k] for k in KEYS if k in request}, 'calibrating': False,
@@ -227,9 +239,19 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
     problems = validate(target, current, cfg)
     commands = plan(target, current) if not problems else []
     with connect() as db:
-        if request:
-            db.execute('UPDATE control_state SET request=NULL WHERE id=1')
+        def done_with_request():
+            if request:
+                db.execute('UPDATE control_state SET request=NULL WHERE id=1')
+
+        def waiting(error):
+            # Offline/stale device: keep a panel request pending; log once per hour, not every minute.
+            if request and not request.get('waiting'):
+                db.execute('UPDATE control_state SET request=%s WHERE id=1', (Jsonb(request | {'waiting': True}),))
+            if not logged_recently(db, error):
+                log_action(db, 'on', target['reason'], commands, snapshot(current), error=error)
+
         if problems:
+            done_with_request()
             log_action(db, cfg['mode'], target['reason'], [], snapshot(current), error=' '.join(problems))
             return 'Rechazado: ' + ' '.join(problems)
         calibration = st['calibration_started']
@@ -239,22 +261,24 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
             calibration = None
         db.execute('UPDATE control_state SET calibration_started=%s WHERE id=1', (calibration,))
         if not commands:
+            done_with_request()
             if cfg['mode'] == 'on' and st['enabled']:
                 db.execute('UPDATE control_state SET last_target=%s WHERE id=1', (Jsonb(target),))
             return 'Sin cambios: ' + target['reason']
         if cfg['mode'] == 'dry-run' or not (st['enabled'] or request):
+            done_with_request()
             log_action(db, 'dry-run', target['reason'], commands, snapshot(current))
             return 'Simulación: enviaría ' + ', '.join(commands)
         if link['online'] is False:
-            log_action(db, 'on', target['reason'], commands, snapshot(current),
-                       error='La nube marca el equipo offline: no acepta comandos aunque lleguen datos; se reintentará')
-            return 'Equipo offline en la nube: no se envía.'
+            waiting('La nube marca el equipo offline: no acepta comandos aunque lleguen datos; se reintentará')
+            return 'Equipo offline en la nube: no se envía' + (' (solicitud en espera).' if request else '.')
         # The cloud accepts commands for an offline datalogger but cannot deliver them (seen as 799011).
         last_seen = series[-1][0] if series else None
         if last_seen is None or now - last_seen > timedelta(minutes=cfg['max_data_age_min']):
             age = 'sin datos' if last_seen is None else f'último dato hace {int((now - last_seen).total_seconds() // 60)} min'
-            log_action(db, 'on', target['reason'], commands, snapshot(current), error=f'Equipo sin conexión ({age}); se reintentará')
-            return f'Equipo sin conexión ({age}): no se envía.'
+            waiting('Equipo sin conexión (sin datos recientes); se reintentará')
+            return f'Equipo sin conexión ({age}): no se envía' + (' (solicitud en espera).' if request else '.')
+        done_with_request()
         if commands_today(db) + len(commands) > cfg['max_commands_day']:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
@@ -302,7 +326,8 @@ def run(stop=None):
             if stop is None:
                 time.sleep(60)
             with connect() as db:
-                if state(db)['request']:
+                pending = state(db)['request']
+                if pending and not pending.get('waiting'):
                     break
 
 

@@ -108,14 +108,14 @@ async function updateControl(){
   if(p){facts.push(['Inversor: vuelta a red',fmt(p.to_grid,0)+' %'],['Inversor: vuelta a batería',fmt(p.to_battery,0)+' %'],['Cargador',labels[p.charger]||String(p.charger)],['Umbrales por SOC',p.soc_mode?'sí':'no ('+p.battery_type+')'])}
   if(st.params_at)facts.push(['Leído',new Date(st.params_at).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})]);
   if(st.last_target)facts.push(['Objetivo',st.last_target.to_grid+'/'+st.last_target.to_battery+' · '+(labels[st.last_target.charger]||'')],['Motivo',st.last_target.reason]);
-  if(st.request)facts.push(['Solicitud pendiente',st.request.label]);
+  if(st.request)facts.push(['Solicitud pendiente',st.request.label+(st.request.waiting?' · esperando que el equipo vuelva online':'')]);
   document.getElementById('controlFacts').replaceChildren(...facts.map(([k,v])=>el('div',{},el('span',{},k),el('b',{},v))));
   document.querySelector('#controlTable tbody').replaceChildren(...r.actions.map(a=>el('tr',{},el('td',{},new Date(a.time).toLocaleString('es-CL',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),el('td',{},MODE_TEXT[a.mode]||a.mode),el('td',{},a.reason),el('td',{},(a.commands||[]).join(', ')||'—'),el('td',{},a.verified?'✓ verificado'+(a.error?' · '+a.error:''):a.error?'⚠ '+a.error:a.mode==='dry-run'?'simulado':'pendiente'))));
   for(const b of document.querySelectorAll('.control [data-preset],#ctlApply'))b.disabled=r.mode==='off';
 }
 async function controlRequest(body){
   const out=document.getElementById('controlResult');
-  try{const r=await solarRequest('/api/control/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});out.textContent='Solicitud registrada ('+r.request.label+'). El servicio de control la valida con el inversor y la aplica en ~1 minuto.';await updateControl()}
+  try{const r=await solarRequest('/api/control/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});out.textContent='Solicitud registrada ('+r.request.label+'). El servicio de control la valida con el inversor y la aplica en ~1 minuto; si el equipo está offline, queda en espera hasta 12 h.';await updateControl()}
   catch(error){out.textContent=error.message}
 }
 document.querySelectorAll('.control [data-preset]').forEach(b=>b.addEventListener('click',()=>{if(confirm('¿Enviar este ajuste al inversor por 24 horas?'))controlRequest({preset:b.dataset.preset})}));

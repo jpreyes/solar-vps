@@ -338,7 +338,8 @@ def control_request():
         raise ValueError('Valores enteros requeridos')
     if low%5 or high%5 or not (cfg['min_soc']<=low<=60) or not (low+5<=high<=100) or charger not in control.CHARGER or not 1<=hours<=336:
         raise ValueError(f'Umbrales fuera de rango: vuelta a red {cfg["min_soc"]}–60 %, vuelta a batería ≥ red + 5, múltiplos de 5; cargador 1–3; 1–336 h.')
-    req={'to_grid':low,'to_battery':high,'charger':charger,'hours':hours,'label':f'{label} {low}/{high}'}
+    req={'to_grid':low,'to_battery':high,'charger':charger,'hours':hours,'label':f'{label} {low}/{high}',
+         'requested_at':datetime.now(timezone.utc).isoformat()}
     with connect() as db:
         db.execute('UPDATE control_state SET request=%s,updated_at=now() WHERE id=1',(psycopg.types.json.Jsonb(req),))
     return jsonify(ok=True,request=req)
