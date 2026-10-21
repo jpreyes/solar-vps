@@ -479,6 +479,8 @@ def main():
     parser = argparse.ArgumentParser(description='Ajustes automáticos de batería vía i.Solar')
     parser.add_argument('--status', action='store_true', help='Solo lee y muestra los ajustes actuales (no envía nada)')
     parser.add_argument('--once', action='store_true', help='Un ciclo con el CONTROL_MODE configurado')
+    parser.add_argument('--test-send', metavar='COMANDO', help='Prueba: envía UN comando de la lista blanca y verifica')
+    parser.add_argument('--slot', type=int, default=1, help='Clave S0n con la que se envía la prueba (el portal usa S05 para MCC)')
     args = parser.parse_args()
     init()
     client = Cloud(os.environ['SOLAR_USERNAME'], os.environ['SOLAR_PASSWORD'])
@@ -499,6 +501,27 @@ def main():
             if key in params:
                 print(f'  {key:5s} {label:42s} {params.get(key)!r}')
         print('Parámetros informados por el equipo:', ', '.join(sorted(params)))
+        return
+    if args.test_send:
+        if not SETTING_COMMAND.fullmatch(args.test_send) or args.test_send.startswith('PCP0'):
+            raise SystemExit('Solo se permite probar PBCC/PBDC/MNCHGC/MUCHGC (no la prioridad del cargador).')
+        key = {'PBCC': 'BCRC', 'PBDC': 'BCRD', 'MNCH': 'MCC', 'MUCH': 'MCG'}[args.test_send[:4]]
+        number = args.test_send[6:] if key in ('MCC', 'MCG') else args.test_send[4:]
+        print('Antes:', key, client.params(sn).get(key))
+        code, message = client.send_settings(sn, [args.test_send], slots=[args.slot])
+        print(f'Enviado {{"S0{args.slot}":"{args.test_send}"}} · respuesta: código {code} {message}')
+        for minute in range(1, 6):
+            time.sleep(60)
+            raw = client.params(sn).get(key)
+            print(f'  {minute} min: {key} = {raw}', flush=True)
+            if str(raw).split(' ')[0] == str(int(number)):
+                print('Aplicado.')
+                break
+        else:
+            print('No se aplicó en 5 minutos.')
+        with connect() as db:
+            log_action(db, 'on', f'Prueba manual {{"S0{args.slot}":"{args.test_send}"}}', [args.test_send], {}, code,
+                       str(raw).split(' ')[0] == str(int(number)), None, message or None)
         return
     if args.once:
         print(step(client, sn))

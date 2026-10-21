@@ -141,7 +141,7 @@ class Cloud:
         return {'online': None if status is None else str(status) == '1', 'updated': row.get('modifyTime'),
                 'wifi_version': row.get('wfv'), 'firmware': [row.get(k) for k in ('fw', 'fw2', 'fw3', 'fw4') if row.get(k)]}
 
-    def send_settings(self, sn, commands):
+    def send_settings(self, sn, commands, slots=None):
         """Send up to five whitelisted battery commands. Returns (code, vendor message).
 
         The message explains non-zero codes (e.g. device offline or no reply); settings
@@ -149,7 +149,10 @@ class Cloud:
         """
         if not commands or len(commands) > 5 or not all(isinstance(c, str) and SETTING_COMMAND.fullmatch(c) for c in commands):
             raise ValueError('Comando de configuración no permitido')
-        payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{i + 1}': c for i, c in enumerate(commands)},
+        slots = slots or [i + 1 for i in range(len(commands))]
+        if len(slots) != len(commands) or len(set(slots)) != len(slots) or not all(isinstance(n, int) and 1 <= n <= 9 for n in slots):
+            raise ValueError('Claves de comando no válidas')
+        payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{n}': c for n, c in zip(slots, commands)},
                                                          separators=(',', ':'))}
         with self.lock:
             if not self.token:
