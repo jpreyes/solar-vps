@@ -18,7 +18,7 @@ from battery_strategy import (System, Strategy, LOAD_SHAPE, battery_life, cost, 
 from storage import connect
 
 MAX_GAP = 900  # seconds; never integrate power across longer outages
-FIELDS = ('workMode', 'statusGrid', 'pvInputPower1', 'pvInputPower2', 'pvInputVoltage1', 'pvInputVoltage2',
+FIELDS = ('workMode', 'statusGrid', 'gridVoltageR', 'pvInputPower1', 'pvInputPower2', 'pvInputVoltage1', 'pvInputVoltage2',
           'acOutputActivePowerTotal', 'gridPowerInputActiveTotal', 'batteryChargingPower',
           'batteryDischargingPower', 'batteryCapacity', 'batteryVoltage', 'innerTemperature',
           'maxTemperature', 'fault1', 'warning')
@@ -70,6 +70,7 @@ def derive(payload):
         'battery_v': num(payload.get('batteryVoltage')) if valid else None,
         'battery_valid': valid,
         'battery_disconnected': not valid and num(payload.get('batteryVoltage')) is not None,
+        'grid_v': num(payload.get('gridVoltageR')),
         'inner_temp': num(payload.get('innerTemperature')),
         'max_temp': num(payload.get('maxTemperature')),
         'fault': num(payload.get('fault1')),
@@ -182,6 +183,24 @@ def estimate_capacity_kwh(series, window=timedelta(hours=3)):
     return round(energy / soc_drop * 100, 1) if soc_drop >= 20 else None
 
 
+def grid_outages(series, min_volts=150, max_gap=MAX_GAP):
+    """Utility outages seen by the inverter: consecutive samples with grid voltage below `min_volts`."""
+    out, start, last = [], None, None
+    for t, d in series:
+        if d['grid_v'] is None:
+            continue
+        down = d['grid_v'] < min_volts
+        if down and start is None:
+            start = t
+        elif start is not None and (not down or (t - last).total_seconds() > max_gap):
+            out.append({'start': start, 'end': last if down else t, 'minutes': round(((last if down else t) - start).total_seconds() / 60)})
+            start = t if down else None
+        last = t
+    if start is not None:
+        out.append({'start': start, 'end': None, 'minutes': round((last - start).total_seconds() / 60)})
+    return out
+
+
 def insights(series, now=None):
     now = now or datetime.now(timezone.utc)
     alerts = []
@@ -220,11 +239,18 @@ def insights(series, now=None):
         alerts.append({'level': 'info', 'code': 'gaps',
                        'text': f'{len(gaps)} cortes de datos mayores a 30 min en 7 días (el mayor: {round(max(gaps).total_seconds() / 3600, 1)} h).',
                        'last': None})
+    outages = grid_outages([(t, d) for t, d in series if t >= now - timedelta(days=30)])
+    if outages:
+        longest = max(o['minutes'] for o in outages)
+        alerts.append({'level': 'info', 'code': 'grid_outage',
+                       'text': f'{len(outages)} cortes de luz de la red en 30 días (el más largo: {longest} min). '
+                               'Se registran para ajustar la reserva por temporal.',
+                       'last': max(o['start'] for o in outages)})
     if series and (now - series[-1][0]).total_seconds() > 3600:
         alerts.append({'level': 'warning', 'code': 'stale',
                        'text': 'No hay datos del inversor en la última hora: revisa el recolector o la conexión del equipo.',
                        'last': series[-1][0]})
-    return {'alerts': alerts, 'days_since_full_charge': days_since_full}
+    return {'alerts': alerts, 'days_since_full_charge': days_since_full, 'grid_outages': outages[-20:]}
 
 
 BUCKETS = (300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800)

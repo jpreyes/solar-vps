@@ -73,6 +73,16 @@ class InsightTests(unittest.TestCase):
         self.assertNotIn('fault', codes)
 
 
+class OutageTests(unittest.TestCase):
+    def test_grid_outages_are_detected_with_duration(self):
+        volts = [228, 227, 0, 0, 0, 226, 228, 0, 229]
+        series = [sample(5 * i, gridVoltageR=v) for i, v in enumerate(volts)]
+        outages = analysis.grid_outages(series)
+        self.assertEqual([o['minutes'] for o in outages], [15, 5])
+        codes = {a['code'] for a in analysis.insights(series, now=T0 + timedelta(minutes=40))['alerts']}
+        self.assertIn('grid_outage', codes)
+
+
 class FieldSeriesTests(unittest.TestCase):
     def test_long_ranges_are_bucketed_not_truncated(self):
         rows = [{'observed_at': T0 + timedelta(minutes=5 * i), 'value': str(i % 10)} for i in range(5000)]
