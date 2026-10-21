@@ -254,13 +254,14 @@ def logged_recently(db, error, minutes=60):
                       (error, minutes)).fetchone() is not None
 
 
-def verify(client, sn, target, tries=10, wait=60, sleep=time.sleep):
+def verify(client, sn, target, tries=10, wait=60, sleep=time.sleep, keys=None):
     """Poll the device until it reports the requested values (the cloud relays commands asynchronously)."""
     current = None
+    wanted = {k: target.get(k) for k in (keys or KEYS)}
     for _ in range(tries):
         sleep(wait)
         current = current_settings(client.params(sn))
-        if same(snapshot(current), target):
+        if same(snapshot(current), wanted):
             return True, current
     return False, current
 
@@ -386,6 +387,33 @@ def step(client, sn, cfg=None, now=None, sleep=time.sleep):
         if not to_safety and commands_today(db) + len(commands) > cfg['max_commands_day']:
             log_action(db, 'on', target['reason'], commands, snapshot(current), error='Límite diario de comandos alcanzado')
             return 'Límite diario de comandos alcanzado.'
+    # Two stages when enabling grid charging: the current limits must be CONFIRMED by the
+    # device before the charger priority lets the utility charge the battery.
+    enabling_grid = (target['charger'] in GRID_CHARGERS
+                     and (current.get('charger') or {}).get('value') not in GRID_CHARGERS)
+    limits = [c for c in commands if c.startswith(('MNCHGC', 'MUCHGC'))]
+    if enabling_grid and limits:
+        print(f'Etapa 1: {", ".join(limits)} · verificando antes de habilitar la red…', flush=True)
+        try:
+            code, message = client.send_settings(sn, limits)
+        except (CloudError, ValueError) as exc:
+            code, message = 'error', str(exc)
+        ok, seen = verify(client, sn, target, sleep=sleep, keys=('charge_a', 'grid_charge_a')) if code != 'error' else (False, None)
+        if not ok:
+            reason = (f'No se habilitó la carga desde la red: el equipo no confirmó {", ".join(limits)} '
+                      f'(código {code}{": " + message if message else ""})')
+            with connect() as db:
+                log_action(db, 'on', target['reason'], limits, snapshot(current), code, False,
+                           snapshot(seen) if seen else None, reason)
+                db.execute('''UPDATE control_state SET enabled=false, last_target=NULL, calibration_started=NULL,
+                  calibration_blocked=%s, paused_reason=%s WHERE id=1''', (reason, reason + '; automatización en pausa.'))
+            event(False, 'Control: ' + reason)
+            return reason
+        with connect() as db:
+            log_action(db, 'on', target['reason'] + ' · etapa 1 (corrientes)', limits, snapshot(current), code, True,
+                       snapshot(seen))
+        commands = [c for c in commands if c not in limits]
+        current = seen
     print(f'Enviando {", ".join(commands)} · {target["reason"]} · verificando con el inversor (hasta 10 min)…', flush=True)
     try:
         code, message = client.send_settings(sn, commands)
