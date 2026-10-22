@@ -30,9 +30,10 @@ SETTING_COMMAND = re.compile(r'(PBCC\d{3}|PBDC\d{3}|PCP0[123]|MNCHGC\d{3}|MUCHGC
 
 
 class CloudError(Exception):
-    def __init__(self,message,retry_after=0):
+    def __init__(self,message,retry_after=0,status=None):
         super().__init__(message)
         self.retry_after=retry_after
+        self.status=status
 
 
 def retry_seconds(value):
@@ -75,7 +76,7 @@ class Cloud:
             delay=retry_seconds(response.headers.get('Retry-After'))
             if response.status_code==429:
                 delay=max(300,delay)
-            raise CloudError(f'HTTP {response.status_code}',retry_after=delay)
+            raise CloudError(f'HTTP {response.status_code}',retry_after=delay,status=response.status_code)
         if response.status_code != 200:
             raise CloudError('Respuesta HTTP inesperada')
         try:
@@ -97,6 +98,24 @@ class Cloud:
             raise CloudError('Falta token/vrtKey en la respuesta de acceso')
         self.token, self.key = str(data['token']), str(data['vrtKey'])
 
+    def _session_post(self, path, payload):
+        """Post with the session token, logging in again once if the cloud says it expired.
+
+        Expiry arrives either as a JSON code or as a bare HTTP 401 (a long-running
+        service kept failing for hours on the latter)."""
+        if not self.token:
+            self.login()
+        try:
+            result = self._post(path, payload)
+        except CloudError as exc:
+            if exc.status != 401:
+                raise
+            result = None
+        if result is None or str(result['code']) in ('450', '401', '403'):
+            self.login()
+            result = self._post(path, payload)
+        return result
+
     def read(self, path, payload):
         with self.lock:
             return self._read(path, payload)
@@ -104,12 +123,7 @@ class Cloud:
     def _read(self, path, payload):
         if path not in READ_PATHS:
             raise ValueError('Operación no permitida')
-        if not self.token:
-            self.login()
-        result = self._post(path, payload)
-        if str(result['code']) in ('450', '401', '403'):
-            self.login()
-            result = self._post(path, payload)
+        result = self._session_post(path, payload)
         if str(result['code']) != '0':
             raise CloudError(f'Consulta rechazada: código {result["code"]}')
         return result
@@ -155,12 +169,7 @@ class Cloud:
         payload = {'deviceSn': sn, 'commands': json.dumps({f'S0{n}': c for n, c in zip(slots, commands)},
                                                          separators=(',', ':'))}
         with self.lock:
-            if not self.token:
-                self.login()
-            result = self._post(PARAM_SET, payload)
-            if str(result['code']) in ('450', '401', '403'):
-                self.login()
-                result = self._post(PARAM_SET, payload)
+            result = self._session_post(PARAM_SET, payload)
         message = result.get('message') or result.get('msg') or ''
         return str(result['code']), str(message)[:200]
 
