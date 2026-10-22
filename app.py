@@ -158,11 +158,15 @@ def daily():
         entry['ghi_kwh_m2']+=(analysis.num(w['payload'].get('shortwave_radiation')) or 0)/1000
         entry['pv_kwh']+=analysis.pv_kw_from_weather(w['payload'],system,kwps)
         entry['hours']+=1
+    # Energy charge only (flat BT1 tariff); the bill's fixed charge is not included.
+    tariff=analysis.env_float('GRID_TARIFF_CLP_KWH','230')
     for row in rows:
         s=sun.get(row['date'])
         row['ghi_kwh_m2']=round(s['ghi_kwh_m2'],2) if s else None
         row['pv_expected_kwh']=round(s['pv_kwh'],1) if s and s['hours']>=20 else None
-    return jsonify(days=rows,basis='kWh integrados de lecturas de 5 min; red solo en modo L (importación real)')
+        row['grid_clp']=round(row['grid_kwh']*tariff)
+    return jsonify(days=rows,tariff_clp_kwh=tariff,
+                   basis='kWh integrados de lecturas de 5 min; red solo en modo L (importación real)')
 
 
 @app.get('/api/insights')
